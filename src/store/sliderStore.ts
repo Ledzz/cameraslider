@@ -34,14 +34,16 @@ export interface SliderSettings {
   currentLimit: number; // 0-100
   microsteps: 1 | 4 | 16 | 32 | 64 | 128 | 256;
   voltage: 5 | 9 | 12 | 15 | 20;
-  leftPointEncoder: number;
-  rightPointEncoder: number;
+  leftPointEncoder: number; // raw encoder steps
+  rightPointEncoder: number; // raw encoder steps
   stopBehavior: StopBehavior;
 }
 
 export interface SliderState {
-  position: number; // 0-100
-  velocity: number; // 0-100
+  position: number; // 0-100 (mapped from encoder)
+  positionEncoder: number; // raw encoder steps from device
+  velocity: number; // 0-100 (mapped)
+  velocityEncoder: number; // raw encoder steps/s from device
   isMoving: boolean;
   stallGuardResult: number;
   driverEnabled: boolean;
@@ -56,6 +58,7 @@ export interface PositionModeConfig {
   maxSpeed: number; // 0-100
   acceleration: number; // 0-100
   currentPointIndex: number;
+  direction: 1 | -1; // for ping-pong
   isRunning: boolean;
 }
 
@@ -72,6 +75,27 @@ export interface BluetoothConnection {
   isConnecting: boolean;
   deviceName: string | null;
   error: string | null;
+}
+
+// Device commands - minimal set in encoder steps
+export interface DeviceCommand {
+  cmd: 'goto' | 'velocity' | 'stop' | 'driver' | 'settings' | 'get_settings' | 'stop_behavior';
+  // goto command
+  target?: number; // encoder steps
+  vel?: number; // encoder steps/s
+  accel?: number; // encoder steps/s²
+  decel?: number; // encoder steps/s²
+  // velocity command
+  mode?: 'ping-pong' | 'stop'; // on stall behavior
+  // driver command
+  enable?: boolean;
+  // settings command
+  stall?: number;
+  current?: number;
+  microsteps?: number;
+  voltage?: number;
+  // stop behavior command
+  behavior?: StopBehavior;
 }
 
 // Type definitions for Web Bluetooth API
@@ -126,6 +150,10 @@ const DEFAULT_DRIVER_STATUS: DriverStatus = {
   standstill: true,
 };
 
+// Conversion constants for speed/acceleration
+const MAX_ENCODER_VELOCITY = 50000; // max encoder steps per second
+const MAX_ENCODER_ACCELERATION = 100000; // max encoder steps per second²
+
 interface SliderStore {
   // Active mode
   activeMode: ActiveMode;
@@ -146,7 +174,7 @@ interface SliderStore {
   saveSettingsToDevice: () => Promise<boolean>;
   loadSettingsFromDevice: () => Promise<boolean>;
 
-  // Position mode
+  // Position mode (app-side logic)
   positionMode: PositionModeConfig;
   updatePositionMode: (config: Partial<PositionModeConfig>) => void;
   addPoint: (point: number) => void;
@@ -157,20 +185,27 @@ interface SliderStore {
   startPositionMode: () => Promise<boolean>;
   stopPositionMode: () => Promise<boolean>;
 
-  // Velocity mode
+  // Velocity mode (app-side logic)
   velocityMode: VelocityModeConfig;
   updateVelocityMode: (config: Partial<VelocityModeConfig>) => void;
   setVelocity: (speed: number) => Promise<boolean>;
   startVelocityMode: () => Promise<boolean>;
   stopVelocityMode: () => Promise<boolean>;
 
-  // Driver control
+  // Device commands (minimal set)
+  sendCommand: (command: DeviceCommand) => Promise<boolean>;
+  gotoPosition: (encoderSteps: number, velocity: number, acceleration: number, deceleration: number) => Promise<boolean>;
+  setDeviceVelocity: (velocity: number, acceleration: number, deceleration: number, mode: 'ping-pong' | 'stop') => Promise<boolean>;
+  stopDevice: () => Promise<boolean>;
   enableDriver: () => Promise<boolean>;
   disableDriver: () => Promise<boolean>;
   setStopBehavior: (behavior: StopBehavior) => Promise<boolean>;
 
-  // Generic command
-  sendCommand: (command: Record<string, unknown>) => Promise<boolean>;
+  // Utility functions
+  percentToEncoder: (percent: number) => number;
+  encoderToPercent: (encoder: number) => number;
+  percentToVelocity: (percent: number) => number;
+  percentToAcceleration: (percent: number) => number;
 }
 
 export const useSliderStore = create<SliderStore>()(
@@ -188,7 +223,9 @@ export const useSliderStore = create<SliderStore>()(
 
       sliderState: {
         position: 0,
+        positionEncoder: 0,
         velocity: 0,
+        velocityEncoder: 0,
         isMoving: false,
         stallGuardResult: 0,
         driverEnabled: false,
@@ -213,6 +250,7 @@ export const useSliderStore = create<SliderStore>()(
         maxSpeed: 50,
         acceleration: 50,
         currentPointIndex: 0,
+        direction: 1,
         isRunning: false,
       },
 
@@ -224,8 +262,43 @@ export const useSliderStore = create<SliderStore>()(
         isRunning: false,
       },
 
+      // Utility: Convert 0-100% to encoder steps
+      percentToEncoder: (percent) => {
+        const { leftPointEncoder, rightPointEncoder } = get().settings;
+        const range = rightPointEncoder - leftPointEncoder;
+        return Math.round(leftPointEncoder + (percent / 100) * range);
+      },
+
+      // Utility: Convert encoder steps to 0-100%
+      encoderToPercent: (encoder) => {
+        const { leftPointEncoder, rightPointEncoder } = get().settings;
+        const range = rightPointEncoder - leftPointEncoder;
+        if (range === 0) return 0;
+        return Math.max(0, Math.min(100, ((encoder - leftPointEncoder) / range) * 100));
+      },
+
+      // Utility: Convert 0-100% speed to encoder velocity
+      percentToVelocity: (percent) => {
+        return Math.round((percent / 100) * MAX_ENCODER_VELOCITY);
+      },
+
+      // Utility: Convert 0-100% to encoder acceleration
+      percentToAcceleration: (percent) => {
+        return Math.round((percent / 100) * MAX_ENCODER_ACCELERATION);
+      },
+
       updateSliderState: (state) =>
-        set((prev) => ({ sliderState: { ...prev.sliderState, ...state } })),
+        set((prev) => {
+          // If we receive raw encoder values, also update the mapped percent values
+          const newState = { ...prev.sliderState, ...state };
+          if (state.positionEncoder !== undefined) {
+            newState.position = get().encoderToPercent(state.positionEncoder);
+          }
+          if (state.velocityEncoder !== undefined) {
+            newState.velocity = Math.min(100, (Math.abs(state.velocityEncoder) / MAX_ENCODER_VELOCITY) * 100);
+          }
+          return { sliderState: newState };
+        }),
 
       updateSettings: (settings) =>
         set((prev) => ({ settings: { ...prev.settings, ...settings } })),
@@ -303,7 +376,27 @@ export const useSliderStore = create<SliderStore>()(
             const data = decoder.decode(value);
             try {
               const parsed = JSON.parse(data);
+              // Device sends raw encoder values, we map them
+              if (parsed.position !== undefined) {
+                parsed.positionEncoder = parsed.position;
+              }
+              if (parsed.velocity !== undefined) {
+                parsed.velocityEncoder = parsed.velocity;
+              }
               get().updateSliderState(parsed);
+              
+              // If settings are received, update them
+              if (parsed.settings) {
+                get().updateSettings({
+                  stallThreshold: parsed.settings.stall,
+                  currentLimit: parsed.settings.current,
+                  microsteps: parsed.settings.microsteps,
+                  voltage: parsed.settings.voltage,
+                  leftPointEncoder: parsed.settings.leftPoint,
+                  rightPointEncoder: parsed.settings.rightPoint,
+                  stopBehavior: parsed.settings.stopBehavior,
+                });
+              }
             } catch {
               console.warn('Failed to parse status notification');
             }
@@ -374,6 +467,7 @@ export const useSliderStore = create<SliderStore>()(
         statusCharRef = null;
       },
 
+      // Send raw command to device
       sendCommand: async (command) => {
         if (!commandCharRef) {
           set((prev) => ({
@@ -398,117 +492,146 @@ export const useSliderStore = create<SliderStore>()(
         }
       },
 
+      // Device command: Go to position (in encoder steps)
+      gotoPosition: async (encoderSteps, velocity, acceleration, deceleration) => {
+        return get().sendCommand({
+          cmd: 'goto',
+          target: encoderSteps,
+          vel: velocity,
+          accel: acceleration,
+          decel: deceleration,
+        });
+      },
+
+      // Device command: Set velocity (in encoder steps/s)
+      setDeviceVelocity: async (velocity, acceleration, deceleration, mode) => {
+        return get().sendCommand({
+          cmd: 'velocity',
+          vel: velocity,
+          accel: acceleration,
+          decel: deceleration,
+          mode,
+        });
+      },
+
+      // Device command: Stop
+      stopDevice: async () => {
+        return get().sendCommand({ cmd: 'stop' });
+      },
+
       saveSettingsToDevice: async () => {
         const { settings, sendCommand } = get();
         return sendCommand({
-          type: 'saveSettings',
-          ...settings,
+          cmd: 'settings',
+          stall: settings.stallThreshold,
+          current: settings.currentLimit,
+          microsteps: settings.microsteps,
+          voltage: settings.voltage,
         });
       },
 
       loadSettingsFromDevice: async () => {
-        const { sendCommand, updateSettings } = get();
-        const success = await sendCommand({ type: 'getSettings' });
-        // Settings will be received via status notification
-        return success;
+        return get().sendCommand({ cmd: 'get_settings' });
       },
 
+      // App-level: Go to a point by index (handles 0-100 to encoder conversion)
       goToPoint: async (index) => {
-        const { positionMode, sendCommand, updatePositionMode } = get();
+        const { positionMode, percentToEncoder, percentToVelocity, percentToAcceleration, gotoPosition, updatePositionMode } = get();
         const point = positionMode.points[index];
         if (point === undefined) return false;
+        
         updatePositionMode({ currentPointIndex: index });
-        return sendCommand({
-          type: 'goto',
-          position: point,
-          speed: positionMode.maxSpeed,
-          acceleration: positionMode.acceleration,
-        });
+        
+        const encoderTarget = percentToEncoder(point);
+        const velocity = percentToVelocity(positionMode.maxSpeed);
+        const acceleration = percentToAcceleration(positionMode.acceleration);
+        
+        return gotoPosition(encoderTarget, velocity, acceleration, acceleration);
       },
 
+      // App-level: Next point logic (handles ping-pong/loop)
       nextPoint: async () => {
         const { positionMode, goToPoint, updatePositionMode } = get();
-        const { currentPointIndex, points, playMode } = positionMode;
+        const { currentPointIndex, points, playMode, direction } = positionMode;
         
-        let nextIndex = currentPointIndex + 1;
+        let nextIndex = currentPointIndex + direction;
+        let newDirection = direction;
+        
         if (nextIndex >= points.length) {
           if (playMode === 'loop') {
             nextIndex = 0;
           } else {
-            // ping-pong: reverse would be handled by firmware or we track direction
+            // ping-pong: reverse direction
+            newDirection = -1;
+            nextIndex = points.length - 2;
+            if (nextIndex < 0) nextIndex = 0;
+          }
+        } else if (nextIndex < 0) {
+          if (playMode === 'loop') {
             nextIndex = points.length - 1;
+          } else {
+            // ping-pong: reverse direction
+            newDirection = 1;
+            nextIndex = 1;
+            if (nextIndex >= points.length) nextIndex = 0;
           }
         }
         
-        updatePositionMode({ currentPointIndex: nextIndex });
+        updatePositionMode({ currentPointIndex: nextIndex, direction: newDirection });
         return goToPoint(nextIndex);
       },
 
       startPositionMode: async () => {
-        const { positionMode, sendCommand, updatePositionMode } = get();
-        const success = await sendCommand({
-          type: 'startPosition',
-          points: positionMode.points,
-          playMode: positionMode.playMode,
-          triggerMode: positionMode.triggerMode,
-          timeout: positionMode.timeout,
-          speed: positionMode.maxSpeed,
-          acceleration: positionMode.acceleration,
-        });
-        if (success) updatePositionMode({ isRunning: true, currentPointIndex: 0 });
-        return success;
+        const { goToPoint, updatePositionMode } = get();
+        updatePositionMode({ isRunning: true, currentPointIndex: 0, direction: 1 });
+        return goToPoint(0);
       },
 
       stopPositionMode: async () => {
-        const { sendCommand, updatePositionMode } = get();
-        const success = await sendCommand({ type: 'stop' });
+        const { stopDevice, updatePositionMode } = get();
+        const success = await stopDevice();
         if (success) updatePositionMode({ isRunning: false });
         return success;
       },
 
+      // App-level: Set velocity (handles 0-100 to encoder conversion)
       setVelocity: async (speed) => {
-        const { velocityMode, sendCommand, updateVelocityMode } = get();
+        const { velocityMode, percentToVelocity, percentToAcceleration, setDeviceVelocity, updateVelocityMode } = get();
         updateVelocityMode({ speed });
-        return sendCommand({
-          type: 'setVelocity',
-          speed,
-          acceleration: velocityMode.acceleration,
-          deceleration: velocityMode.deceleration,
-        });
+        
+        const velocity = percentToVelocity(speed);
+        const acceleration = percentToAcceleration(velocityMode.acceleration);
+        const deceleration = percentToAcceleration(velocityMode.deceleration);
+        const mode = velocityMode.playMode === 'ping-pong' ? 'ping-pong' : 'stop';
+        
+        return setDeviceVelocity(velocity, acceleration, deceleration, mode);
       },
 
       startVelocityMode: async () => {
-        const { velocityMode, sendCommand, updateVelocityMode } = get();
-        const success = await sendCommand({
-          type: 'startVelocity',
-          speed: velocityMode.speed,
-          acceleration: velocityMode.acceleration,
-          deceleration: velocityMode.deceleration,
-          playMode: velocityMode.playMode,
-        });
-        if (success) updateVelocityMode({ isRunning: true });
-        return success;
+        const { velocityMode, setVelocity, updateVelocityMode } = get();
+        updateVelocityMode({ isRunning: true });
+        return setVelocity(velocityMode.speed);
       },
 
       stopVelocityMode: async () => {
-        const { sendCommand, updateVelocityMode } = get();
-        const success = await sendCommand({ type: 'stop' });
+        const { stopDevice, updateVelocityMode } = get();
+        const success = await stopDevice();
         if (success) updateVelocityMode({ isRunning: false });
         return success;
       },
 
       enableDriver: async () => {
-        return get().sendCommand({ type: 'enableDriver', enabled: true });
+        return get().sendCommand({ cmd: 'driver', enable: true });
       },
 
       disableDriver: async () => {
-        return get().sendCommand({ type: 'enableDriver', enabled: false });
+        return get().sendCommand({ cmd: 'driver', enable: false });
       },
 
       setStopBehavior: async (behavior) => {
         const { sendCommand, updateSettings } = get();
         updateSettings({ stopBehavior: behavior });
-        return sendCommand({ type: 'setStopBehavior', behavior });
+        return sendCommand({ cmd: 'stop_behavior', behavior });
       },
     }),
     {
