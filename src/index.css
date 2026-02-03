@@ -43,7 +43,9 @@
     --point-a: 200 100% 50%;
     --point-b: 30 100% 50%;
     --warning: 45 100% 50%;
+    --warning-foreground: 220 20% 5%;
     --success: 160 100% 40%;
+    --success-foreground: 220 20% 5%;
 
     --sidebar-background: 220 20% 8%;
     --sidebar-foreground: 210 20% 90%;
