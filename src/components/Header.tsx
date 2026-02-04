@@ -1,13 +1,14 @@
 import { Settings, Bluetooth, BluetoothConnected, BluetoothSearching } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { useSliderStore } from '@/store/sliderStore';
+import {manualConnect, useSliderStore} from '@/store/sliderStore';
 
 interface HeaderProps {
   onSettingsClick: () => void;
 }
 
 export function Header({ onSettingsClick }: HeaderProps) {
-  const { connection, connect } = useSliderStore();
+  const isConnecting = useSliderStore(s => s.isConnecting);
+  const isConnected = useSliderStore(s => s.isConnected);
 
   return (
     <header className="sticky top-0 z-50 w-full bg-background/95 backdrop-blur border-b border-border">
@@ -19,12 +20,12 @@ export function Header({ onSettingsClick }: HeaderProps) {
 
         <div className="flex items-center gap-2">
           {/* Connection Status */}
-          {connection.isConnected ? (
+          {isConnected ? (
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-success/10 text-success text-xs">
               <BluetoothConnected className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">{connection.deviceName}</span>
+              <span className="hidden sm:inline">Connected</span>
             </div>
-          ) : connection.isConnecting ? (
+          ) : isConnecting ? (
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-warning/10 text-warning text-xs">
               <BluetoothSearching className="w-3.5 h-3.5 animate-pulse" />
               <span className="hidden sm:inline">Connecting...</span>
@@ -33,7 +34,7 @@ export function Header({ onSettingsClick }: HeaderProps) {
             <Button
               variant="outline"
               size="sm"
-              onClick={connect}
+              onClick={manualConnect}
               className="gap-2 text-xs h-8"
             >
               <Bluetooth className="w-3.5 h-3.5" />

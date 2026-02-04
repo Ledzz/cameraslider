@@ -52,7 +52,9 @@ function DriverStatusDisplay({ status }: { status: DriverStatus }) {
 }
 
 export function SliderStatus() {
-  const { sliderState, connection, activeMode } = useSliderStore();
+  const sliderState = useSliderStore(s => s.sliderState);
+  const isConnected = useSliderStore(s => s.isConnected);
+  const activeMode = useSliderStore(s => s.activeMode);
 
   return (
     <Card className="bg-card/80 backdrop-blur border-border">
@@ -117,7 +119,7 @@ export function SliderStatus() {
           {/* Driver Status */}
           <div className="col-span-2 border-t border-border pt-2 mt-1">
             <div className="text-xs text-muted-foreground mb-1">Driver Status</div>
-            <DriverStatusDisplay status={sliderState.driverStatus} />
+            {/*<DriverStatusDisplay status={sliderState.driverStatus} />*/}
           </div>
         </div>
       </CardContent>

@@ -1,14 +1,20 @@
-import { useState } from 'react';
+import {useEffect, useState} from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Header } from '@/components/Header';
 import { PositionMode } from '@/components/modes/PositionMode';
 import { VelocityMode } from '@/components/modes/VelocityMode';
 import { SettingsDialog } from '@/components/settings/SettingsDialog';
-import { useSliderStore, ActiveMode } from '@/store/sliderStore';
+import {useSliderStore, ActiveMode, autoConnect, setActiveMode} from '@/store/sliderStore';
 
 const Index = () => {
-  const { activeMode, setActiveMode, connection } = useSliderStore();
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  useEffect(() => {
+    autoConnect();
+  }, []);
+
+  const error  = useSliderStore(s => s.error);
+  const activeMode  = useSliderStore(s => s.activeMode);
 
   return (
     <div className="min-h-screen bg-background technical-grid">
@@ -16,9 +22,9 @@ const Index = () => {
 
       <main className="container max-w-lg mx-auto px-4 py-4">
         {/* Error Display */}
-        {connection.error && (
+        {error && (
           <div className="mb-4 p-3 rounded-md bg-destructive/10 border border-destructive/30 text-destructive text-sm">
-            {connection.error}
+            {error}
           </div>
         )}
 
@@ -33,7 +39,7 @@ const Index = () => {
           </TabsList>
 
           <TabsContent value="position" className="mt-0">
-            <PositionMode />
+            {/*<PositionMode />*/}
           </TabsContent>
 
           <TabsContent value="velocity" className="mt-0">
