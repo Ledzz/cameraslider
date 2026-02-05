@@ -26,6 +26,7 @@ export function VelocityMode() {
   //   setStandstillMode,
   // } = useSliderStore();
   const velocityMode = useSliderStore(s => s.velocityMode)
+  const sliderState = useSliderStore(s => s.sliderState)
 
   const handleStart = async () => {
     // const success = await startVelocityMode();
@@ -90,7 +91,7 @@ export function VelocityMode() {
           <div className="flex items-center justify-center p-4 rounded-lg bg-secondary/50 border border-border">
             <div className="text-center">
               <div className="text-3xl font-mono font-bold text-primary">
-                {/*{sliderState.velocity.toFixed(1)}%*/}
+                {sliderState.velocity.toFixed(1)}%
               </div>
               <div className="text-xs text-muted-foreground mt-1">Current Velocity</div>
             </div>

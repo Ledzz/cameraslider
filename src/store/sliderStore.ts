@@ -366,9 +366,9 @@ export const sendCommand = async (command: any) => {
 
 
 export const setVelocity = async ({velocity}) => {
-  await sendCommand({cmd: 'velocity', vel: velocity*MAX_ENCODER_VELOCITY})
-
+  await sendCommand({cmd: 'velocity', vel: velocity/100*MAX_ENCODER_VELOCITY, mode: "ping-pong"})
 }
+
 export const setEnabled=async (enable: boolean) => {
   await sendCommand({cmd: 'driver', enable})
 
@@ -438,7 +438,7 @@ export const useSliderStore = create()(
       // },
       //
       velocityMode: {
-        speed: 50,
+        speed: 0,
       //   acceleration: 50,
       //   deceleration: 50,
       //   playMode: "ping-pong",
