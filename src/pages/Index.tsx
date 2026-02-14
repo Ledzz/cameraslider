@@ -39,7 +39,7 @@ const Index = () => {
           </TabsList>
 
           <TabsContent value="position" className="mt-0">
-            {/*<PositionMode />*/}
+            <PositionMode />
           </TabsContent>
 
           <TabsContent value="velocity" className="mt-0">

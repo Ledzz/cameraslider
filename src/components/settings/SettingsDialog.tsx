@@ -1,4 +1,4 @@
-import { Save, BluetoothOff, Settings2 } from 'lucide-react';
+import { Save, BluetoothOff, Settings2, AlertTriangle, Compass } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import {useSliderStore, StandstillMode, saveSettingsToDevice, disconnect, updateSettings} from '@/store/sliderStore';
+import {useSliderStore, StandstillMode, saveSettingsToDevice, disconnect, updateSettings, startCalibration} from '@/store/sliderStore';
 import { useToast } from '@/hooks/use-toast';
 import { SliderStatus } from '@/components/SliderStatus';
 
@@ -20,8 +20,8 @@ interface SettingsDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-const MICROSTEP_OPTIONS = [1, 4, 16, 32, 64, 128, 256] as const;
-const VOLTAGE_OPTIONS = [5, 9, 12, 15, 20] as const;
+const MICROSTEP_OPTIONS = [1, 2, 4, 8, 16, 32, 64, 128, 256] as const;
+const VOLTAGE_OPTIONS = [5, 12, 15, 20] as const;
 
 export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const { toast } = useToast();
@@ -31,6 +31,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   // } = useSliderStore();
   const sliderState = useSliderStore(s => s.sliderState);
   const isConnected = useSliderStore(s => s.isConnected);
+  const isCalibrated = sliderState.homed && sliderState.rightPoint > sliderState.leftPoint;
 
   const handleSave = async () => {
     const success = await saveSettingsToDevice();
@@ -45,6 +46,22 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const handleDisconnect = () => {
     disconnect();
     onOpenChange(false);
+  };
+
+  const handleCalibrate = async () => {
+    const success = await startCalibration();
+    if (success) {
+      toast({
+        title: 'Calibration started',
+        description: 'Slider entered calibrating mode',
+      });
+    } else {
+      toast({
+        title: 'Calibration failed',
+        description: 'Could not start calibration',
+        variant: 'destructive',
+      });
+    }
   };
 
   return (
@@ -81,6 +98,15 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
 
           {/* Slider Status in Settings */}
           <SliderStatus />
+
+          {!isCalibrated && (
+            <div className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 p-3 text-warning">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <p className="text-xs">
+                Slider is not calibrated. Run calibration before using Goto mode.
+              </p>
+            </div>
+          )}
 
           {/* Stall Threshold */}
           <div className="space-y-3">
@@ -156,23 +182,33 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
           <div className="space-y-2">
             <Label className="text-xs text-muted-foreground">Standstill mode</Label>
             <Select
-              value={sliderState.standstillMode}
-              onValueChange={(v) => updateSettings({ standstillMode: v as StandstillMode })}
+              value={String(sliderState.standstillMode)}
+              onValueChange={(v) => updateSettings({ standstillMode: Number(v) as StandstillMode })}
             >
               <SelectTrigger className="bg-secondary border-border">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value={0}>Free (No Holding)</SelectItem>
-                <SelectItem value={1}>Hold Position</SelectItem>
-                <SelectItem value={2}>Brake (Passive)</SelectItem>
-              </SelectContent>
-            </Select>
+                  <SelectItem value="0">Normal</SelectItem>
+                  <SelectItem value="1">Freewheeling</SelectItem>
+                  <SelectItem value="2">Strong Braking</SelectItem>
+                  <SelectItem value="3">Braking</SelectItem>
+                </SelectContent>
+              </Select>
           </div>
 
           {/* Encoder Values (Read-only display) */}
           <div className="space-y-4 pt-2 border-t border-border">
             <h4 className="text-sm font-semibold">Encoder Calibration</h4>
+            <Button
+              variant="secondary"
+              onClick={handleCalibrate}
+              disabled={!isConnected}
+              className="w-full gap-2"
+            >
+              <Compass className="w-4 h-4" />
+              Start Calibration
+            </Button>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label className="text-xs text-muted-foreground">Left Point</Label>

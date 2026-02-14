@@ -1,17 +1,21 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-// BLE UUIDs - these should match your slider's firmware
 const SERVICE_UUID = "12345678-1234-5678-1234-56789abcdef0";
 const COMMAND_CHARACTERISTIC_UUID = "12345678-1234-5678-1234-56789abcdef1";
 const STATUS_CHARACTERISTIC_UUID = "12345678-1234-5678-1234-56789abcdef2";
+const RESPONSE_CHARACTERISTIC_UUID = "12345678-1234-5678-1234-56789abcdef3";
 
-enum StandstillMode {
+const DEFAULT_MAX_SPEED = 25000;
+const COMMAND_TIMEOUT_MS = 2000;
+
+export enum StandstillMode {
   NORMAL = 0,
   FREEWHEELING = 1,
   STRONG_BRAKING = 2,
   BRAKING = 3,
 }
+
 export type PlayMode = "ping-pong" | "loop";
 export type TriggerMode = "button" | "timeout";
 export type ActiveMode = "position" | "velocity";
@@ -34,115 +38,70 @@ export interface DriverStatus {
   standstill: boolean;
 }
 
-export interface SliderSettings {
-  stallThreshold: number; // 0-100
-  currentLimit: number; // 0-100
-  pdVoltage: 1 | 4 | 16 | 32 | 64 | 128 | 256;
-  voltage: 5 | 9 | 12 | 15 | 20;
-  leftPoint: number; // raw encoder steps
-  rightPoint: number; // raw encoder steps
-  standstillMode: StandstillMode;
-}
-
 export interface SliderState {
-  position: number; // 0-100 (mapped from encoder)
-  positionEncoder: number; // raw encoder steps from device
-  velocity: number; // 0-100 (mapped)
-  velocityEncoder: number; // raw encoder steps/s from device
+  position: number;
+  velocity: number;
   isMoving: boolean;
+  homed: boolean;
   stallGuardResult: number;
   driverEnabled: boolean;
   driverStatus: DriverStatus;
+  mode: string;
+  sessionId: number | null;
+  fw: string;
+  error: string;
+  target: number;
+  velocityCmd: number;
+
+  currentLimit: number;
+  stallThreshold: number;
+  microsteps: 1 | 2 | 4 | 8 | 16 | 32 | 64 | 128 | 256;
+  pdVoltage: 5 | 12 | 15 | 20;
+  standstillMode: StandstillMode;
+  leftPoint: number;
+  rightPoint: number;
+
+  maxSpeed: number;
+  acceleration: number;
+  homingSpeed: number;
+  gotoMaxVel: number;
+  timelapse1Vel: number;
+  timelapse2Vel: number;
+  move1Vel: number;
+  timelapse2DelayMs: number;
 }
 
-export interface PositionModeConfig {
-  points: number[]; // 0-100 values
-  playMode: PlayMode;
-  triggerMode: TriggerMode;
-  timeout: number; // seconds
-  maxSpeed: number; // 0-100
-  acceleration: number; // 0-100
-  currentPointIndex: number;
-  direction: 1 | -1; // for ping-pong
-  isRunning: boolean;
+interface VelocityModeState {
+  speed: number;
 }
 
-export interface VelocityModeConfig {
-  speed: number; // 0-100
-  acceleration: number; // 0-100
-  deceleration: number; // 0-100
-  playMode: PlayMode; // ping-pong or stop on stall
-  isRunning: boolean;
-}
-
-export interface BluetoothConnection {
+interface SliderStore {
+  activeMode: ActiveMode;
   isConnected: boolean;
   isConnecting: boolean;
-  deviceName: string | null;
-  error: string | null;
+  error: string;
+  sliderState: SliderState;
+  velocityMode: VelocityModeState;
 }
 
-// Device commands - minimal set in encoder steps
-export interface DeviceCommand {
-  cmd:
-    | "goto"
-    | "velocity"
-    | "stop"
-    | "driver"
-    | "settings"
-    | "get_settings"
-    | "stop_behavior";
-  // goto command
-  target?: number; // encoder steps
-  vel?: number; // encoder steps/s
-  accel?: number; // encoder steps/s²
-  decel?: number; // encoder steps/s²
-  // velocity command
-  mode?: "ping-pong" | "stop"; // on stall behavior
-  // driver command
-  enable?: boolean;
-  // settings command
-  stall?: number;
-  current?: number;
-  microsteps?: number;
-  voltage?: number;
-  // stop behavior command
-  behavior?: StandstillMode;
+interface AckResponse {
+  ok?: boolean;
+  cmd?: string;
+  reason?: string;
+  requestId?: string;
+  sessionId?: number;
+  fw?: string;
+  mode?: string;
+  error?: string;
 }
 
-// Type definitions for Web Bluetooth API
-type BLEDevice = {
-  id: string;
-  name?: string;
-  gatt?: {
-    connected: boolean;
-    connect(): Promise<BLEServer>;
-    disconnect(): void;
-  };
-  addEventListener(type: string, listener: () => void): void;
-  removeEventListener(type: string, listener: () => void): void;
-};
+type CommandPayload = Record<string, unknown> & { cmd: string };
 
-type BLEServer = {
-  getPrimaryService(service: string): Promise<BLEService>;
+type PendingCommand = {
+  resolve: (response: AckResponse) => void;
+  reject: (error: Error) => void;
+  timeoutId: ReturnType<typeof setTimeout>;
 };
-
-type BLEService = {
-  getCharacteristic(characteristic: string): Promise<BLECharacteristic>;
-};
-
-type BLECharacteristic = {
-  value: DataView | null;
-  startNotifications(): Promise<BLECharacteristic>;
-  writeValue(value: BufferSource): Promise<void>;
-  readValue(): Promise<DataView>;
-  addEventListener(type: string, listener: (event: Event) => void): void;
-};
-
-// BLE refs stored outside store
-let deviceRef: BLEDevice | null = null;
-let commandCharRef: BLECharacteristic | null = null;
-let statusCharRef: BLECharacteristic | null = null;
 
 const DEFAULT_DRIVER_STATUS: DriverStatus = {
   over_temperature_warning: false,
@@ -162,715 +121,508 @@ const DEFAULT_DRIVER_STATUS: DriverStatus = {
   standstill: true,
 };
 
-// Conversion constants for speed/acceleration
-const MAX_ENCODER_VELOCITY = 10000; // max encoder steps per second
-const MAX_ENCODER_ACCELERATION = 1000; // max encoder steps per second²
+const DEFAULT_SLIDER_STATE: SliderState = {
+  position: 0,
+  velocity: 0,
+  isMoving: false,
+  homed: false,
+  stallGuardResult: 0,
+  driverEnabled: false,
+  driverStatus: DEFAULT_DRIVER_STATUS,
+  mode: "idle",
+  sessionId: null,
+  fw: "",
+  error: "",
+  target: 0,
+  velocityCmd: 0,
 
+  currentLimit: 50,
+  stallThreshold: 50,
+  microsteps: 16,
+  pdVoltage: 12,
+  standstillMode: StandstillMode.NORMAL,
+  leftPoint: 0,
+  rightPoint: 10000,
 
-const log = console.log;
+  maxSpeed: DEFAULT_MAX_SPEED,
+  acceleration: 180000,
+  homingSpeed: 9000,
+  gotoMaxVel: 8000,
+  timelapse1Vel: 6000,
+  timelapse2Vel: 3000,
+  move1Vel: 7000,
+  timelapse2DelayMs: 20,
+};
 
-export const autoConnect = async () => {
+let deviceRef: BluetoothDevice | null = null;
+let commandCharRef: BluetoothRemoteGATTCharacteristic | null = null;
+let statusCharRef: BluetoothRemoteGATTCharacteristic | null = null;
+let responseCharRef: BluetoothRemoteGATTCharacteristic | null = null;
+
+let statusListener: ((event: Event) => void) | null = null;
+let responseListener: ((event: Event) => void) | null = null;
+let disconnectListener: (() => void) | null = null;
+let requestCounter = 0;
+let currentSessionId: number | null = null;
+
+const pendingCommands = new Map<string, PendingCommand>();
+
+const clamp = (value: number, min: number, max: number) =>
+  Math.min(max, Math.max(min, value));
+
+const nextRequestId = () => {
+  requestCounter += 1;
+  return `req-${Date.now()}-${requestCounter}`;
+};
+
+const clearPendingCommands = (reason: string) => {
+  for (const [, pending] of pendingCommands) {
+    clearTimeout(pending.timeoutId);
+    pending.reject(new Error(reason));
+  }
+  pendingCommands.clear();
+};
+
+const toUserError = (error: unknown, fallback: string) =>
+  error instanceof Error ? error.message : fallback;
+
+const mapRawPositionToPercent = (position: number, leftPoint: number, rightPoint: number) => {
+  const range = rightPoint - leftPoint;
+  if (!Number.isFinite(range) || range === 0) return 0;
+  return clamp(((position - leftPoint) / range) * 100, 0, 100);
+};
+
+const mapRawVelocityToPercent = (velocity: number, maxSpeed: number) => {
+  const base = maxSpeed > 0 ? maxSpeed : DEFAULT_MAX_SPEED;
+  return clamp((Math.abs(velocity) / base) * 100, 0, 100);
+};
+
+const onSessionChange = (nextSessionId: number) => {
+  if (currentSessionId === null) {
+    currentSessionId = nextSessionId;
+    return;
+  }
+
+  if (currentSessionId !== nextSessionId) {
+    currentSessionId = nextSessionId;
+    clearPendingCommands("BLE session changed");
+  }
+};
+
+const handleResponseNotification = (event: Event) => {
+  const target = event.target as unknown as BluetoothRemoteGATTCharacteristic | null;
+  const value = target?.value;
+  if (!value) return;
+
   try {
-    log("Getting existing permitted Bluetooth devices...");
-    const devices = await navigator.bluetooth.getDevices();
+    const data = new TextDecoder().decode(value.buffer);
+    const parsed = JSON.parse(data) as AckResponse;
 
-    log("> Got " + devices.length + " Bluetooth devices.");
-    // These devices may not be powered on or in range, so scan for
-    // advertisement packets from them before connecting.
-    for (const device of devices) {
-      connectToDevice(device);
+    if (typeof parsed.sessionId === "number") {
+      onSessionChange(parsed.sessionId);
     }
-  } catch (error) {
-    log("Argh! " + error);
-  }
-}
 
-const connectToDevice = async (device: BluetoothDevice) => {
-  const abortController = new AbortController();
-
-  device.addEventListener(
-      "advertisementreceived",
-      async (event: BluetoothAdvertisingEvent) => {
-        log('> Received advertisement from "' + device.name + '"...');
-        // Stop watching advertisements to conserve battery life.
-        abortController.abort();
-        useSliderStore.setState({isConnecting: true});
-        log('Connecting to GATT Server from "' + device.name + '"...');
-        try {
-          const server = await device.gatt?.connect();
-          log('> Bluetooth device "' + device.name + " connected.");
-
-          const service = await server?.getPrimaryService(SERVICE_UUID);
-          commandCharRef = await service?.getCharacteristic(COMMAND_CHARACTERISTIC_UUID);
-          statusCharRef = await service?.getCharacteristic(STATUS_CHARACTERISTIC_UUID);
-          // document.getElementById("status").textContent = "Connected!";
-          useSliderStore.setState({isConnecting: false});
-          useSliderStore.setState({isConnected: true});
-
-            await statusCharRef.startNotifications();
-          let prevSettings=  "";
-                statusCharRef.addEventListener(
-                  "characteristicvaluechanged",
-                    event => {
-                        const target = event.target as unknown as BLECharacteristic | null;
-                        const value = target?.value;
-                        if (value) {
-                          const decoder = new TextDecoder();
-                          const data = decoder.decode(value);
-                          if (prevSettings === data) {
-                            return;
-                          }
-                          prevSettings = data;
-                          try {
-                            const parsed = JSON.parse(data);
-                            useSliderStore.setState({sliderState: {...useSliderStore.getState().sliderState, ...parsed}});
-
-                            console.log("characteristicvaluechanged", useSliderStore.getState().sliderState);
-                          } catch {
-                            console.warn("Failed to parse status notification");
-                          }
-                        } })
-
-        } catch (error) {
-          log("Argh! " + error);
-        }
-      },
-      { once: true },
-  );
-
-  try {
-    log('Watching advertisements from "' + device.name + '"...');
-    await device.watchAdvertisements({ signal: abortController.signal });
-  } catch (error) {
-    log("Argh! " + error);
-  }
-}
-
-export const manualConnect = async () => {
-  try {
-    log("Requesting any Bluetooth device...");
-    const device = await navigator.bluetooth.requestDevice({
-      filters: [
-        {
-          services: [SERVICE_UUID],
+    if (typeof parsed.sessionId === "number" || parsed.fw || parsed.mode || parsed.error) {
+      useSliderStore.setState((state) => ({
+        sliderState: {
+          ...state.sliderState,
+          sessionId:
+            typeof parsed.sessionId === "number"
+              ? parsed.sessionId
+              : state.sliderState.sessionId,
+          fw: typeof parsed.fw === "string" ? parsed.fw : state.sliderState.fw,
+          mode: typeof parsed.mode === "string" ? parsed.mode : state.sliderState.mode,
+          error: typeof parsed.error === "string" ? parsed.error : state.sliderState.error,
         },
-      ],
+      }));
+    }
+
+    if (!parsed.requestId) {
+      return;
+    }
+
+    const pending = pendingCommands.get(parsed.requestId);
+    if (!pending) {
+      return;
+    }
+
+    clearTimeout(pending.timeoutId);
+    pendingCommands.delete(parsed.requestId);
+    pending.resolve(parsed);
+  } catch {
+    useSliderStore.setState({ error: "Malformed BLE response payload" });
+  }
+};
+
+const applyStatusUpdate = (payload: Record<string, unknown>) => {
+  useSliderStore.setState((state) => {
+    const leftPoint =
+      typeof payload.leftPoint === "number"
+        ? payload.leftPoint
+        : state.sliderState.leftPoint;
+    const rightPoint =
+      typeof payload.rightPoint === "number"
+        ? payload.rightPoint
+        : state.sliderState.rightPoint;
+    const rawPosition =
+      typeof payload.position === "number"
+        ? payload.position
+        : mapRawPositionToPercent(state.sliderState.position, leftPoint, rightPoint);
+    const maxSpeed =
+      typeof payload.maxSpeed === "number"
+        ? payload.maxSpeed
+        : state.sliderState.maxSpeed;
+
+    const velocityFromPayload =
+      typeof payload.velocity === "number"
+        ? payload.velocity
+        : typeof payload.velocityCmd === "number"
+          ? payload.velocityCmd
+          : null;
+
+    if (typeof payload.sessionId === "number") {
+      onSessionChange(payload.sessionId);
+    }
+
+    return {
+      sliderState: {
+        ...state.sliderState,
+        ...payload,
+        leftPoint,
+        rightPoint,
+        maxSpeed,
+        position:
+          typeof payload.position === "number"
+            ? mapRawPositionToPercent(rawPosition, leftPoint, rightPoint)
+            : state.sliderState.position,
+        velocity:
+          typeof velocityFromPayload === "number"
+            ? mapRawVelocityToPercent(velocityFromPayload, maxSpeed)
+            : state.sliderState.velocity,
+        mode: typeof payload.mode === "string" ? payload.mode : state.sliderState.mode,
+        sessionId:
+          typeof payload.sessionId === "number"
+            ? payload.sessionId
+            : state.sliderState.sessionId,
+        fw: typeof payload.fw === "string" ? payload.fw : state.sliderState.fw,
+        error: typeof payload.error === "string" ? payload.error : state.sliderState.error,
+      },
+    };
+  });
+};
+
+const handleStatusNotification = (event: Event) => {
+  const target = event.target as unknown as BluetoothRemoteGATTCharacteristic | null;
+  const value = target?.value;
+  if (!value) return;
+
+  try {
+    const data = new TextDecoder().decode(value.buffer);
+    const parsed = JSON.parse(data) as Record<string, unknown>;
+    applyStatusUpdate(parsed);
+  } catch {
+    useSliderStore.setState({ error: "Malformed BLE status payload" });
+  }
+};
+
+const executeCommand = async (
+  command: CommandPayload,
+  timeoutMs = COMMAND_TIMEOUT_MS,
+): Promise<boolean> => {
+  if (!commandCharRef) {
+    useSliderStore.setState({ error: "Not connected to BLE device" });
+    return false;
+  }
+
+  if (!responseCharRef) {
+    useSliderStore.setState({ error: "BLE response characteristic unavailable" });
+    return false;
+  }
+
+  const requestId = nextRequestId();
+  const payload = { ...command, requestId };
+
+  try {
+    const responsePromise = new Promise<AckResponse>((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        pendingCommands.delete(requestId);
+        reject(new Error("BLE command timeout"));
+      }, timeoutMs);
+
+      pendingCommands.set(requestId, { resolve, reject, timeoutId });
     });
 
-    log("> Requested " + device.name);
-  } catch (error) {
-    log("Argh! " + error);
-  }
-}
+    const encoded = new TextEncoder().encode(JSON.stringify(payload));
+    await commandCharRef.writeValue(encoded);
 
-export const setActiveMode = (activeMode: ActiveMode) => {
-  useSliderStore.setState({activeMode})
-}
-
-// interface SliderStore {
-  // // Active mode
-  // activeMode: ActiveMode;
-  // setActiveMode: (mode: ActiveMode) => void;
-  //
-  // // Connection
-  // connection: BluetoothConnection;
-  // connect: () => Promise<void>;
-  // disconnect: () => void;
-  //
-  // // Slider state (from device)
-  // sliderState: SliderState;
-  // updateSliderState: (state: Partial<SliderState>) => void;
-  //
-  // // Settings
-  // settings: SliderSettings;
-  // updateSettings: (settings: Partial<SliderSettings>) => void;
-  // saveSettingsToDevice: () => Promise<boolean>;
-  // loadSettingsFromDevice: () => Promise<boolean>;
-  //
-  // // Position mode (app-side logic)
-  // positionMode: PositionModeConfig;
-  // updatePositionMode: (config: Partial<PositionModeConfig>) => void;
-  // addPoint: (point: number) => void;
-  // removePoint: (index: number) => void;
-  // updatePoint: (index: number, value: number) => void;
-  // goToPoint: (index: number) => Promise<boolean>;
-  // nextPoint: () => Promise<boolean>;
-  // startPositionMode: () => Promise<boolean>;
-  // stopPositionMode: () => Promise<boolean>;
-  //
-  // // Velocity mode (app-side logic)
-  // velocityMode: VelocityModeConfig;
-  // updateVelocityMode: (config: Partial<VelocityModeConfig>) => void;
-  // setVelocity: (speed: number) => Promise<boolean>;
-  // startVelocityMode: () => Promise<boolean>;
-  // stopVelocityMode: () => Promise<boolean>;
-  //
-  // // Device commands (minimal set)
-  // sendCommand: (command: DeviceCommand) => Promise<boolean>;
-  // gotoPosition: (
-  //   encoderSteps: number,
-  //   velocity: number,
-  //   acceleration: number,
-  //   deceleration: number,
-  // ) => Promise<boolean>;
-  // setDeviceVelocity: (
-  //   velocity: number,
-  //   acceleration: number,
-  //   deceleration: number,
-  //   mode: "ping-pong" | "stop",
-  // ) => Promise<boolean>;
-  // stopDevice: () => Promise<boolean>;
-  // enableDriver: () => Promise<boolean>;
-  // disableDriver: () => Promise<boolean>;
-  // setStandstillMode: (behavior: StandstillMode) => Promise<boolean>;
-  //
-  // // Utility functions
-  // percentToEncoder: (percent: number) => number;
-  // encoderToPercent: (encoder: number) => number;
-  // percentToVelocity: (percent: number) => number;
-  // percentToAcceleration: (percent: number) => number;
-// }
-
-// export const connect
-
-export const saveSettingsToDevice = () => {}
-export const disconnect = () => {}
-export const updateSettings = (partialSetting) => {
-}
-export const sendCommand = async (command: any) => {
-    try {
-      const encoder = new TextEncoder();
-      const data = encoder.encode(JSON.stringify(command));
-      console.log('sendCommand', JSON.stringify(command));
-      await commandCharRef.writeValue(data);
-      return true;
-    } catch (e) {
-      // set((prev) => ({
-      //   connection: {
-      //     ...prev.connection,
-      //     error:
-      //       error instanceof Error
-      //         ? error.message
-      //         : "Failed to send command",
-      //   },
-      // }));
-      const error =   e instanceof Error
-              ? e.message
-              : "Failed to send command";
-      useSliderStore.setState({
-        error
-      })
+    const ack = await responsePromise;
+    if (!ack.ok) {
+      const reason = ack.reason || ack.error || "Command rejected";
+      useSliderStore.setState({ error: reason });
       return false;
     }
-}
 
+    useSliderStore.setState({ error: "" });
+    return true;
+  } catch (error) {
+    const message = toUserError(error, "Failed to send command");
+    useSliderStore.setState({ error: message });
+    return false;
+  }
+};
 
-export const setVelocity = async ({velocity}) => {
-  await sendCommand({cmd: 'velocity', vel: velocity/100*MAX_ENCODER_VELOCITY, mode: "ping-pong"})
-}
+const cleanupConnection = (message?: string) => {
+  if (statusCharRef && statusListener) {
+    statusCharRef.removeEventListener("characteristicvaluechanged", statusListener);
+  }
+  if (responseCharRef && responseListener) {
+    responseCharRef.removeEventListener("characteristicvaluechanged", responseListener);
+  }
+  if (deviceRef && disconnectListener) {
+    deviceRef.removeEventListener("gattserverdisconnected", disconnectListener);
+  }
 
-export const setEnabled=async (enable: boolean) => {
-  await sendCommand({cmd: 'driver', enable})
+  clearPendingCommands("BLE disconnected");
 
-}
-export const stop = async () => {
-  await sendCommand({cmd: 'stop'})
-}
-export const useSliderStore = create()(
+  commandCharRef = null;
+  statusCharRef = null;
+  responseCharRef = null;
+  statusListener = null;
+  responseListener = null;
+  disconnectListener = null;
+  currentSessionId = null;
+
+  useSliderStore.setState({
+    isConnected: false,
+    isConnecting: false,
+    error: message || "",
+  });
+};
+
+const connectToDevice = async (device: BluetoothDevice) => {
+  useSliderStore.setState({ isConnecting: true, error: "" });
+
+  try {
+    const server = await device.gatt?.connect();
+    if (!server) {
+      throw new Error("Failed to connect to GATT server");
+    }
+
+    const service = await server.getPrimaryService(SERVICE_UUID);
+
+    commandCharRef = await service.getCharacteristic(COMMAND_CHARACTERISTIC_UUID);
+    statusCharRef = await service.getCharacteristic(STATUS_CHARACTERISTIC_UUID);
+    responseCharRef = await service.getCharacteristic(RESPONSE_CHARACTERISTIC_UUID);
+
+    if (statusListener) {
+      statusCharRef.removeEventListener("characteristicvaluechanged", statusListener);
+    }
+    statusListener = handleStatusNotification;
+    await statusCharRef.startNotifications();
+    statusCharRef.addEventListener("characteristicvaluechanged", statusListener);
+
+    if (responseListener) {
+      responseCharRef.removeEventListener("characteristicvaluechanged", responseListener);
+    }
+    responseListener = handleResponseNotification;
+    await responseCharRef.startNotifications();
+    responseCharRef.addEventListener("characteristicvaluechanged", responseListener);
+
+    if (disconnectListener) {
+      device.removeEventListener("gattserverdisconnected", disconnectListener);
+    }
+    disconnectListener = () => {
+      cleanupConnection("Device disconnected");
+    };
+    device.addEventListener("gattserverdisconnected", disconnectListener);
+
+    deviceRef = device;
+
+    const pingOk = await executeCommand({ cmd: "ping" });
+    if (!pingOk) {
+      throw new Error("Ping failed after connect");
+    }
+
+    useSliderStore.setState({ isConnecting: false, isConnected: true, error: "" });
+  } catch (error) {
+    cleanupConnection(toUserError(error, "Failed to connect"));
+  }
+};
+
+export const autoConnect = async () => {
+  if (!navigator.bluetooth) {
+    useSliderStore.setState({ error: "Web Bluetooth not supported in this browser" });
+    return;
+  }
+
+  try {
+    const bluetooth = navigator.bluetooth as Bluetooth & {
+      getDevices?: () => Promise<BluetoothDevice[]>;
+    };
+
+    if (!bluetooth.getDevices) {
+      return;
+    }
+
+    const devices = await bluetooth.getDevices();
+    for (const device of devices) {
+      await connectToDevice(device);
+      if (useSliderStore.getState().isConnected) {
+        return;
+      }
+    }
+  } catch (error) {
+    useSliderStore.setState({ error: toUserError(error, "Auto connect failed") });
+  }
+};
+
+export const manualConnect = async () => {
+  if (!navigator.bluetooth) {
+    useSliderStore.setState({ error: "Web Bluetooth not supported in this browser" });
+    return;
+  }
+
+  try {
+    const device = await navigator.bluetooth.requestDevice({
+      filters: [{ services: [SERVICE_UUID] }],
+      optionalServices: [SERVICE_UUID],
+    });
+
+    await connectToDevice(device);
+  } catch (error) {
+    useSliderStore.setState({ error: toUserError(error, "BLE device selection failed") });
+  }
+};
+
+export const disconnect = () => {
+  if (deviceRef?.gatt?.connected) {
+    deviceRef.gatt.disconnect();
+  }
+
+  cleanupConnection();
+  deviceRef = null;
+};
+
+export const setActiveMode = (activeMode: ActiveMode) => {
+  useSliderStore.setState({ activeMode });
+};
+
+export const updateSettings = (partialSetting: Partial<SliderState>) => {
+  useSliderStore.setState((state) => ({
+    sliderState: {
+      ...state.sliderState,
+      ...partialSetting,
+    },
+  }));
+};
+
+export const saveSettingsToDevice = async () => {
+  const s = useSliderStore.getState().sliderState;
+
+  return executeCommand({
+    cmd: "settings",
+    currentLimit: s.currentLimit,
+    microsteps: s.microsteps,
+    pdVoltage: s.pdVoltage,
+    standstillMode: s.standstillMode,
+    maxSpeed: s.maxSpeed,
+    acceleration: s.acceleration,
+    homingSpeed: s.homingSpeed,
+    gotoMaxVel: s.gotoMaxVel,
+    timelapse1Vel: s.timelapse1Vel,
+    timelapse2Vel: s.timelapse2Vel,
+    move1Vel: s.move1Vel,
+    timelapse2DelayMs: s.timelapse2DelayMs,
+  });
+};
+
+export const setEnabled = async (enable: boolean) => {
+  const success = await executeCommand({ cmd: "driver", enable });
+  if (success) {
+    useSliderStore.setState((state) => ({
+      sliderState: {
+        ...state.sliderState,
+        driverEnabled: enable,
+      },
+    }));
+  }
+  return success;
+};
+
+export const setVelocity = async ({ velocity }: { velocity: number }) => {
+  const clamped = clamp(velocity, 0, 100);
+  const maxSpeed = useSliderStore.getState().sliderState.maxSpeed || DEFAULT_MAX_SPEED;
+  const vel = Math.round((clamped / 100) * maxSpeed);
+
+  const success = await executeCommand({ cmd: "velocity", vel });
+  if (success) {
+    useSliderStore.setState((state) => ({
+      velocityMode: { ...state.velocityMode, speed: clamped },
+    }));
+  }
+  return success;
+};
+
+export const stop = async () => executeCommand({ cmd: "stop" });
+
+export const startCalibration = async () =>
+  executeCommand({
+    cmd: "mode",
+    mode: "calibrating",
+  });
+
+export const goToPercent = async (percent: number, maxVel?: number) => {
+  const state = useSliderStore.getState().sliderState;
+  const leftPoint = state.leftPoint;
+  const rightPoint = state.rightPoint;
+
+  if (!state.homed) {
+    useSliderStore.setState({
+      error: "Slider is not calibrated yet.",
+    });
+    return false;
+  }
+
+  if (rightPoint <= leftPoint) {
+    useSliderStore.setState({
+      error: "Invalid calibration range. Set left/right points first.",
+    });
+    return false;
+  }
+
+  const clamped = clamp(percent, 0, 100);
+  const target = Math.round(leftPoint + ((rightPoint - leftPoint) * clamped) / 100);
+  const payload: CommandPayload = {
+    cmd: "mode",
+    mode: "goto",
+    target,
+  };
+
+  if (typeof maxVel === "number" && maxVel > 0) {
+    payload.maxVel = maxVel;
+  }
+
+  return executeCommand(payload);
+};
+
+export const useSliderStore = create<SliderStore>()(
   persist(
-    (set, get) => ({
+    () => ({
       activeMode: "position",
       isConnected: false,
       isConnecting: false,
       error: "",
-
-      sliderState: {
-        wasStopped: false,
-        stallThreshold: 50,
-        currentLimit: 50,
-        microsteps: 16,
-        pdVoltage: 5,
-        leftPoint: 0,
-        rightPoint: 0,
-        standstillMode: StandstillMode.NORMAL,
-        position: 0,
-        driverEnabled: false,
-        velocity: 0,
-      },
-      // connection: {
-      //   isConnected: false,
-      //   isConnecting: false,
-      //   deviceName: null,
-      //   error: null,
-      // },
-      //
-      // sliderState: {
-      //   position: 0,
-      //   positionEncoder: 0,
-      //   velocity: 0,
-      //   velocityEncoder: 0,
-      //   isMoving: false,
-      //   stallGuardResult: 0,
-      //   driverEnabled: false,
-      //   driverStatus: DEFAULT_DRIVER_STATUS,
-      // },
-      //
-      // settings: {
-      //   stallThreshold: 50,
-      //   currentLimit: 50,
-      //   microsteps: 16,
-      //   voltage: 12,
-      //   leftPoint: 0,
-      //   rightPoint: 10000,
-      //   standstillMode: StandstillMode.NORMAL,
-      // },
-      //
-      // positionMode: {
-      //   points: [0, 50, 100],
-      //   playMode: "ping-pong",
-      //   triggerMode: "button",
-      //   timeout: 5,
-      //   maxSpeed: 50,
-      //   acceleration: 50,
-      //   currentPointIndex: 0,
-      //   direction: 1,
-      //   isRunning: false,
-      // },
-      //
+      sliderState: { ...DEFAULT_SLIDER_STATE },
       velocityMode: {
         speed: 0,
-      //   acceleration: 50,
-      //   deceleration: 50,
-      //   playMode: "ping-pong",
-      //   isRunning: false,
       },
-      //
-      // // Utility: Convert 0-100% to encoder steps
-      // percentToEncoder: (percent) => {
-      //   const { leftPoint, rightPoint } = get().settings;
-      //   const range = rightPoint - leftPoint;
-      //   return Math.round(leftPoint + (percent / 100) * range);
-      // },
-      //
-      // // Utility: Convert encoder steps to 0-100%
-      // encoderToPercent: (encoder) => {
-      //   const { leftPoint, rightPoint } = get().settings;
-      //   const range = rightPoint - leftPoint;
-      //   if (range === 0) return 0;
-      //   return Math.max(
-      //     0,
-      //     Math.min(100, ((encoder - leftPoint) / range) * 100),
-      //   );
-      // },
-      //
-      // // Utility: Convert 0-100% speed to encoder velocity
-      // percentToVelocity: (percent) => {
-      //   return Math.round((percent / 100) * MAX_ENCODER_VELOCITY);
-      // },
-      //
-      // // Utility: Convert 0-100% to encoder acceleration
-      // percentToAcceleration: (percent) => {
-      //   return Math.round((percent / 100) * MAX_ENCODER_ACCELERATION);
-      // },
-      //
-      // updateSliderState: (state) =>
-      //   set((prev) => {
-      //     // If we receive raw encoder values, also update the mapped percent values
-      //     const newState = { ...prev.sliderState, ...state };
-      //     if (state.position !== undefined) {
-      //       newState.position = get().encoderToPercent(state.position);
-      //     }
-      //     if (state.velocity !== undefined) {
-      //       newState.velocity = Math.min(
-      //         100,
-      //         (Math.abs(state.velocity) / MAX_ENCODER_VELOCITY) * 100,
-      //       );
-      //     }
-      //     return { sliderState: newState };
-      //   }),
-      //
-      // updateSettings: (settings) =>
-      //   set((prev) => ({ settings: { ...prev.settings, ...settings } })),
-      //
-      // updatePositionMode: (config) =>
-      //   set((prev) => ({ positionMode: { ...prev.positionMode, ...config } })),
-      //
-      // updateVelocityMode: (config) =>
-      //   set((prev) => ({ velocityMode: { ...prev.velocityMode, ...config } })),
-      //
-      // addPoint: (point) =>
-      //   set((prev) => ({
-      //     positionMode: {
-      //       ...prev.positionMode,
-      //       points: [...prev.positionMode.points, point].sort((a, b) => a - b),
-      //     },
-      //   })),
-      //
-      // removePoint: (index) =>
-      //   set((prev) => ({
-      //     positionMode: {
-      //       ...prev.positionMode,
-      //       points: prev.positionMode.points.filter((_, i) => i !== index),
-      //     },
-      //   })),
-      //
-      // updatePoint: (index, value) =>
-      //   set((prev) => {
-      //     const newPoints = [...prev.positionMode.points];
-      //     newPoints[index] = value;
-      //     return {
-      //       positionMode: {
-      //         ...prev.positionMode,
-      //         points: newPoints.sort((a, b) => a - b),
-      //       },
-      //     };
-      //   }),
-      //
-      // connect: async () => {
-      //   const nav = navigator as Navigator & {
-      //     bluetooth?: { requestDevice(options: unknown): Promise<BLEDevice> };
-      //   };
-      //   const bluetooth = nav.bluetooth;
-      //
-      //   if (!bluetooth) {
-      //     set((prev) => ({
-      //       connection: {
-      //         ...prev.connection,
-      //         error: "Web Bluetooth not supported",
-      //       },
-      //     }));
-      //     return;
-      //   }
-      //
-      //   set((prev) => ({
-      //     connection: { ...prev.connection, isConnecting: true, error: null },
-      //   }));
-      //
-      //   const handleDisconnection = () => {
-      //     set({
-      //       connection: {
-      //         isConnected: false,
-      //         isConnecting: false,
-      //         deviceName: null,
-      //         error: "Device disconnected",
-      //       },
-      //     });
-      //     deviceRef = null;
-      //     commandCharRef = null;
-      //     statusCharRef = null;
-      //   };
-      //
-      //   let prevSettings;
-      //
-      //   const handleStatusNotification = (event: Event) => {
-      //     const target = event.target as unknown as BLECharacteristic | null;
-      //     const value = target?.value;
-      //     if (value) {
-      //       const decoder = new TextDecoder();
-      //       const data = decoder.decode(value);
-      //       if (prevSettings === data) {
-      //         return;
-      //       }
-      //       prevSettings = data;
-      //       try {
-      //         const parsed = JSON.parse(data);
-      //         get().updateSliderState(parsed);
-      //         get().updateSettings(parsed);
-      //         console.log(parsed.driverEnabled);
-      //         if (get().velocityMode.isRunning && parsed.wasStopped) {
-      //           get().updateVelocityMode({isRunning: false})
-      //         }
-      //       } catch {
-      //         console.warn("Failed to parse status notification");
-      //       }
-      //     }
-      //   };
-      //
-      //   try {
-      //     const device = await bluetooth.requestDevice({
-      //       filters: [{ services: [SERVICE_UUID] }],
-      //       optionalServices: [SERVICE_UUID],
-      //     });
-      //
-      //     device.addEventListener(
-      //       "gattserverdisconnected",
-      //       handleDisconnection,
-      //     );
-      //     deviceRef = device;
-      //
-      //     const server = await device.gatt?.connect();
-      //     if (!server) throw new Error("Failed to connect to GATT server");
-      //
-      //     const service = await server.getPrimaryService(SERVICE_UUID);
-      //
-      //     commandCharRef = await service.getCharacteristic(
-      //       COMMAND_CHARACTERISTIC_UUID,
-      //     );
-      //
-      //     try {
-      //       statusCharRef = await service.getCharacteristic(
-      //         STATUS_CHARACTERISTIC_UUID,
-      //       );
-      //       await statusCharRef.startNotifications();
-      //       statusCharRef.addEventListener(
-      //         "characteristicvaluechanged",
-      //         handleStatusNotification,
-      //       );
-      //     } catch {
-      //       console.warn("Status characteristic not available");
-      //     }
-      //
-      //     set({
-      //       connection: {
-      //         isConnected: true,
-      //         isConnecting: false,
-      //         deviceName: device.name || "Camera Slider",
-      //         error: null,
-      //       },
-      //     });
-      //
-      //     // Load settings from device after connection
-      //     await get().loadSettingsFromDevice();
-      //   } catch (error) {
-      //     set({
-      //       connection: {
-      //         isConnected: false,
-      //         isConnecting: false,
-      //         deviceName: null,
-      //         error:
-      //           error instanceof Error ? error.message : "Failed to connect",
-      //       },
-      //     });
-      //   }
-      // },
-      //
-      // disconnect: () => {
-      //   if (deviceRef?.gatt?.connected) {
-      //     deviceRef.gatt.disconnect();
-      //   }
-      //   set({
-      //     connection: {
-      //       isConnected: false,
-      //       isConnecting: false,
-      //       deviceName: null,
-      //       error: null,
-      //     },
-      //   });
-      //   deviceRef = null;
-      //   commandCharRef = null;
-      //   statusCharRef = null;
-      // },
-      //
-      // // Send raw command to device
-      // sendCommand: async (command) => {
-      //
-      //   if (!commandCharRef) {
-      //     set((prev) => ({
-      //       connection: {
-      //         ...prev.connection,
-      //         error: "Not connected to device",
-      //       },
-      //     }));
-      //     return false;
-      //   }
-      //
-      //   try {
-      //     const encoder = new TextEncoder();
-      //     const data = encoder.encode(JSON.stringify(command));
-      //     console.log('sendCommand', JSON.stringify(command));
-      //     await commandCharRef.writeValue(data);
-      //     return true;
-      //   } catch (error) {
-      //     set((prev) => ({
-      //       connection: {
-      //         ...prev.connection,
-      //         error:
-      //           error instanceof Error
-      //             ? error.message
-      //             : "Failed to send command",
-      //       },
-      //     }));
-      //     return false;
-      //   }
-      // },
-      //
-      // // Device command: Go to position (in encoder steps)
-      // gotoPosition: async (
-      //   encoderSteps,
-      //   velocity,
-      //   acceleration,
-      //   deceleration,
-      // ) => {
-      //   return get().sendCommand({
-      //     cmd: "goto",
-      //     target: encoderSteps,
-      //     vel: velocity,
-      //     accel: acceleration,
-      //     decel: deceleration,
-      //   });
-      // },
-      //
-      // // Device command: Set velocity (in encoder steps/s)
-      // setDeviceVelocity: async (velocity, acceleration, deceleration, mode) => {
-      //   return get().sendCommand({
-      //     cmd: "velocity",
-      //     vel: velocity,
-      //     accel: acceleration,
-      //     decel: deceleration,
-      //     mode,
-      //   });
-      // },
-      //
-      // // Device command: Stop
-      // stopDevice: async () => {
-      //   return get().sendCommand({ cmd: "stop" });
-      // },
-      //
-      // saveSettingsToDevice: async () => {
-      //   const { settings, sendCommand } = get();
-      //   return sendCommand({
-      //     cmd: "settings",
-      //     ...settings
-      //   });
-      // },
-      //
-      // loadSettingsFromDevice: async () => {
-      //   return get().sendCommand({ cmd: "get_settings" });
-      // },
-      //
-      // // App-level: Go to a point by index (handles 0-100 to encoder conversion)
-      // goToPoint: async (index) => {
-      //   const {
-      //     positionMode,
-      //     percentToEncoder,
-      //     percentToVelocity,
-      //     percentToAcceleration,
-      //     gotoPosition,
-      //     updatePositionMode,
-      //   } = get();
-      //   const point = positionMode.points[index];
-      //   if (point === undefined) return false;
-      //
-      //   updatePositionMode({ currentPointIndex: index });
-      //
-      //   const encoderTarget = percentToEncoder(point);
-      //   const velocity = percentToVelocity(positionMode.maxSpeed);
-      //   const acceleration = percentToAcceleration(positionMode.acceleration);
-      //
-      //   return gotoPosition(
-      //     encoderTarget,
-      //     velocity,
-      //     acceleration,
-      //     acceleration,
-      //   );
-      // },
-      //
-      // // App-level: Next point logic (handles ping-pong/loop)
-      // nextPoint: async () => {
-      //   const { positionMode, goToPoint, updatePositionMode } = get();
-      //   const { currentPointIndex, points, playMode, direction } = positionMode;
-      //
-      //   let nextIndex = currentPointIndex + direction;
-      //   let newDirection = direction;
-      //
-      //   if (nextIndex >= points.length) {
-      //     if (playMode === "loop") {
-      //       nextIndex = 0;
-      //     } else {
-      //       // ping-pong: reverse direction
-      //       newDirection = -1;
-      //       nextIndex = points.length - 2;
-      //       if (nextIndex < 0) nextIndex = 0;
-      //     }
-      //   } else if (nextIndex < 0) {
-      //     if (playMode === "loop") {
-      //       nextIndex = points.length - 1;
-      //     } else {
-      //       // ping-pong: reverse direction
-      //       newDirection = 1;
-      //       nextIndex = 1;
-      //       if (nextIndex >= points.length) nextIndex = 0;
-      //     }
-      //   }
-      //
-      //   updatePositionMode({
-      //     currentPointIndex: nextIndex,
-      //     direction: newDirection,
-      //   });
-      //   return goToPoint(nextIndex);
-      // },
-      //
-      // startPositionMode: async () => {
-      //   const { goToPoint, updatePositionMode } = get();
-      //   updatePositionMode({
-      //     isRunning: true,
-      //     currentPointIndex: 0,
-      //     direction: 1,
-      //   });
-      //   return goToPoint(0);
-      // },
-      //
-      // stopPositionMode: async () => {
-      //   const { stopDevice, updatePositionMode } = get();
-      //   const success = await stopDevice();
-      //   if (success) updatePositionMode({ isRunning: false });
-      //   return success;
-      // },
-      //
-      // // App-level: Set velocity (handles 0-100 to encoder conversion)
-      // setVelocity: async (speed) => {
-      //   const {
-      //     velocityMode,
-      //     percentToVelocity,
-      //     percentToAcceleration,
-      //     setDeviceVelocity,
-      //     updateVelocityMode,
-      //   } = get();
-      //   updateVelocityMode({ speed });
-      //
-      //   const velocity = percentToVelocity(speed);
-      //   const acceleration = percentToAcceleration(velocityMode.acceleration);
-      //   const deceleration = percentToAcceleration(velocityMode.deceleration);
-      //   const mode =
-      //     velocityMode.playMode === "ping-pong" ? "ping-pong" : "stop";
-      //
-      //   return setDeviceVelocity(velocity, acceleration, deceleration, mode);
-      // },
-      //
-      // startVelocityMode: async () => {
-      //   const { velocityMode, setVelocity, updateVelocityMode } = get();
-      //   updateVelocityMode({ isRunning: true });
-      //   return setVelocity(velocityMode.speed);
-      // },
-      //
-      // stopVelocityMode: async () => {
-      //   const { stopDevice, updateVelocityMode } = get();
-      //   const success = await stopDevice();
-      //   if (success) updateVelocityMode({ isRunning: false });
-      //   return success;
-      // },
-      //
-      // enableDriver: async () => {
-      //   return get().sendCommand({ cmd: "driver", enable: true });
-      // },
-      //
-      // disableDriver: async () => {
-      //   return get().sendCommand({ cmd: "driver", enable: false });
-      // },
-      //
-      // setStandstillMode: async (behavior) => {
-      //   const { sendCommand, updateSettings } = get();
-      //   updateSettings({ standstillMode: behavior });
-      //   return sendCommand({ cmd: "stop_behavior", behavior });
-      // },
     }),
     {
       name: "camera-slider-storage",
       partialize: (state) => ({
-        settings: state.settings,
-        positionMode: state.positionMode,
-        velocityMode: state.velocityMode,
         activeMode: state.activeMode,
+        sliderState: state.sliderState,
+        velocityMode: state.velocityMode,
       }),
     },
   ),

@@ -1,46 +1,13 @@
-import { Gauge, Play, Square, Unlock } from 'lucide-react';
+import { Gauge } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Switch } from '@/components/ui/switch';
-import {useSliderStore, PlayMode, setVelocity, setEnabled} from '@/store/sliderStore';
-import { PositionVisualization } from '@/components/PositionVisualization';
+import {useSliderStore, setVelocity, setEnabled} from '@/store/sliderStore';
 import { SliderStatus } from '@/components/SliderStatus';
-import { useToast } from '@/hooks/use-toast';
 
 export function VelocityMode() {
-  const { toast } = useToast();
-  // const {
-  //   velocityMode,
-  //   sliderState,
-  //   settings,
-  //   connection,
-  //   updateVelocityMode,
-  //   setVelocity,
-  //   startVelocityMode,
-  //   stopVelocityMode,
-  //   enableDriver,
-  //   disableDriver,
-  //   setStandstillMode,
-  // } = useSliderStore();
   const velocityMode = useSliderStore(s => s.velocityMode)
   const sliderState = useSliderStore(s => s.sliderState)
-
-  const handleStart = async () => {
-    // const success = await startVelocityMode();
-    // if (success) {
-    //   toast({ title: 'Started', description: 'Velocity mode activated' });
-    // }
-  };
-
-  const handleStop = async () => {
-    // const success = await stopVelocityMode();
-    // if (success) {
-    //   toast({ title: 'Stopped', description: 'Movement stopped' });
-    // }
-  };
 
   const handleSpeedChange = async (value: number) => {
     // updateVelocityMode({ speed: value });
@@ -50,18 +17,6 @@ export function VelocityMode() {
     // }
   };
 
-  const handleDriverToggle = async (enabled: boolean) => {
-    // if (enabled) {
-    //   await enableDriver();
-    // } else {
-    //   await disableDriver();
-    // }
-  };
-
-  const handleFreeMode = async () => {
-    // await setStandstillMode('free');
-    // toast({ title: 'Free Mode', description: 'Slider is now free to move manually' });
-  };
 
   return (
     <div className="space-y-4">
