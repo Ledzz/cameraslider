@@ -1,4 +1,5 @@
 import { cn } from '@/lib/utils';
+import { useRef, type PointerEvent } from 'react';
 
 interface PositionVisualizationProps {
   currentPosition: number;
@@ -6,6 +7,10 @@ interface PositionVisualizationProps {
   pointB: number;
   stepMarkers?: number[]; // For timelapse2 mode
   isRunning?: boolean;
+  targetPercent?: number | null;
+  interactive?: boolean;
+  onSeek?: (percent: number) => void;
+  onSeekPreview?: (percent: number) => void;
   className?: string;
 }
 
@@ -15,8 +20,15 @@ export function PositionVisualization({
   pointB,
   stepMarkers = [],
   isRunning = false,
+  targetPercent = null,
+  interactive = false,
+  onSeek,
+  onSeekPreview,
   className,
 }: PositionVisualizationProps) {
+  const trackRef = useRef<HTMLDivElement | null>(null);
+  const isDraggingRef = useRef(false);
+
   // Calculate positions as percentages (0-100 range assumed)
   const minPoint = Math.min(pointA, pointB);
   const maxPoint = Math.max(pointA, pointB);
@@ -31,6 +43,38 @@ export function PositionVisualization({
   const pointAPercent = getPercentage(pointA);
   const pointBPercent = getPercentage(pointB);
 
+  const getPercentFromClientX = (clientX: number) => {
+    const rect = trackRef.current?.getBoundingClientRect();
+    if (!rect || rect.width <= 0) {
+      return 0;
+    }
+    const relativeX = clientX - rect.left;
+    return Math.max(0, Math.min(100, (relativeX / rect.width) * 100));
+  };
+
+  const handlePointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    if (!interactive) return;
+    isDraggingRef.current = true;
+    const percent = getPercentFromClientX(event.clientX);
+    onSeekPreview?.(percent);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const handlePointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    if (!interactive || !isDraggingRef.current) return;
+    const percent = getPercentFromClientX(event.clientX);
+    onSeekPreview?.(percent);
+  };
+
+  const handlePointerUp = (event: PointerEvent<HTMLDivElement>) => {
+    if (!interactive || !isDraggingRef.current) return;
+    isDraggingRef.current = false;
+    const percent = getPercentFromClientX(event.clientX);
+    onSeekPreview?.(percent);
+    onSeek?.(percent);
+    event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+
   return (
     <div className={cn("relative", className)}>
       {/* Labels */}
@@ -40,7 +84,16 @@ export function PositionVisualization({
       </div>
 
       {/* Track */}
-      <div className="relative h-8 bg-secondary rounded-md overflow-hidden">
+      <div
+        ref={trackRef}
+        className={cn(
+          "relative h-8 bg-secondary rounded-md overflow-hidden",
+          interactive && "cursor-crosshair touch-none"
+        )}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+      >
         {/* Active range indicator */}
         <div
           className="absolute h-full bg-primary/20"
@@ -87,6 +140,25 @@ export function PositionVisualization({
           )}
           style={{ left: `${currentPercent}%`, transform: 'translateX(-50%)' }}
         />
+      </div>
+
+      <div className="relative mt-2 h-2 rounded-full bg-secondary/70">
+        <div
+          className="absolute inset-y-0 left-0 rounded-full bg-primary/20"
+          style={{ width: `${currentPercent}%` }}
+        />
+        {targetPercent !== null && (
+          <>
+            <div
+              className="absolute top-1/2 h-4 w-0.5 -translate-y-1/2 bg-primary"
+              style={{ left: `${targetPercent}%` }}
+            />
+            <div
+              className="absolute top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-background bg-primary"
+              style={{ left: `${targetPercent}%` }}
+            />
+          </>
+        )}
       </div>
 
       {/* Scale */}

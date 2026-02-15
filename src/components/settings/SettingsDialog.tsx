@@ -1,4 +1,5 @@
-import { Save, BluetoothOff, Settings2, AlertTriangle, Compass } from 'lucide-react';
+import { BluetoothOff, Settings2, AlertTriangle, Compass } from 'lucide-react';
+import { useEffect, useMemo, useRef } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -7,7 +8,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -32,16 +32,81 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const sliderState = useSliderStore(s => s.sliderState);
   const isConnected = useSliderStore(s => s.isConnected);
   const isCalibrated = sliderState.homed && sliderState.rightPoint > sliderState.leftPoint;
+  const lastSentSettingsRef = useRef<string | null>(null);
 
-  const handleSave = async () => {
-    const success = await saveSettingsToDevice();
-    if (success) {
-      toast({ title: 'Settings Saved', description: 'Settings applied to device' });
-      onOpenChange(false);
-    } else {
-      toast({ title: 'Error', description: 'Failed to save settings', variant: 'destructive' });
+  const hasAccelerationLimit = sliderState.accelerationLimit > 0;
+  const accelerationLimit = hasAccelerationLimit ? sliderState.accelerationLimit : 1;
+  const accelerationPercent = Math.max(
+    0,
+    Math.min(100, Math.round((sliderState.acceleration / accelerationLimit) * 100)),
+  );
+
+  const settingsSnapshot = useMemo(
+    () =>
+      JSON.stringify({
+        currentLimit: sliderState.currentLimit,
+        microsteps: sliderState.microsteps,
+        pdVoltage: sliderState.pdVoltage,
+        standstillMode: sliderState.standstillMode,
+        maxSpeed: sliderState.maxSpeed,
+        acceleration: sliderState.acceleration,
+        homingSpeed: sliderState.homingSpeed,
+        gotoMaxVel: sliderState.gotoMaxVel,
+        timelapse1Vel: sliderState.timelapse1Vel,
+        timelapse2Vel: sliderState.timelapse2Vel,
+        move1Vel: sliderState.move1Vel,
+        timelapse2DelayMs: sliderState.timelapse2DelayMs,
+      }),
+    [
+      sliderState.currentLimit,
+      sliderState.microsteps,
+      sliderState.pdVoltage,
+      sliderState.standstillMode,
+      sliderState.maxSpeed,
+      sliderState.acceleration,
+      sliderState.homingSpeed,
+      sliderState.gotoMaxVel,
+      sliderState.timelapse1Vel,
+      sliderState.timelapse2Vel,
+      sliderState.move1Vel,
+      sliderState.timelapse2DelayMs,
+    ],
+  );
+
+  useEffect(() => {
+    if (!open) {
+      lastSentSettingsRef.current = null;
+      return;
     }
-  };
+    if (lastSentSettingsRef.current === null) {
+      lastSentSettingsRef.current = settingsSnapshot;
+    }
+  }, [open, settingsSnapshot]);
+
+  useEffect(() => {
+    if (!open || !isConnected) {
+      return;
+    }
+
+    if (lastSentSettingsRef.current === settingsSnapshot) {
+      return;
+    }
+
+    const timeoutId = setTimeout(async () => {
+      const success = await saveSettingsToDevice();
+      if (success) {
+        lastSentSettingsRef.current = settingsSnapshot;
+      } else {
+        toast({
+          title: 'Autosave failed',
+          description: 'Could not save changed settings',
+          variant: 'destructive',
+        });
+      }
+    }, 300);
+
+    return () => clearTimeout(timeoutId);
+  }, [open, isConnected, settingsSnapshot, toast]);
 
   const handleDisconnect = () => {
     disconnect();
@@ -138,6 +203,25 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
             />
           </div>
 
+          <div className="space-y-3">
+            <div className="flex justify-between">
+              <Label className="text-xs text-muted-foreground">Acceleration</Label>
+              <span className="text-sm font-mono text-primary">{accelerationPercent}%</span>
+            </div>
+            <Slider
+              value={[accelerationPercent]}
+              onValueChange={([v]) =>
+                updateSettings({
+                  acceleration: Math.round((accelerationLimit * v) / 100),
+                })
+              }
+              min={0}
+              max={100}
+              step={1}
+              disabled={!hasAccelerationLimit}
+            />
+          </div>
+
           {/* Microsteps */}
           <div className="space-y-2">
             <Label className="text-xs text-muted-foreground">Microsteps</Label>
@@ -197,7 +281,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
               </Select>
           </div>
 
-          {/* Encoder Values (Read-only display) */}
+          {/* Encoder Calibration */}
           <div className="space-y-4 pt-2 border-t border-border">
             <h4 className="text-sm font-semibold">Encoder Calibration</h4>
             <Button
@@ -209,40 +293,10 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
               <Compass className="w-4 h-4" />
               Start Calibration
             </Button>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label className="text-xs text-muted-foreground">Left Point</Label>
-                <Input
-                  type="number"
-                  value={sliderState.leftPoint}
-                  onChange={(e) => updateSettings({ leftPoint: parseInt(e.target.value) || 0 })}
-                  className="font-mono bg-secondary border-border"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label className="text-xs text-muted-foreground">Right Point</Label>
-                <Input
-                  type="number"
-                  value={sliderState.rightPoint}
-                  onChange={(e) => updateSettings({ rightPoint: parseInt(e.target.value) || 0 })}
-                  className="font-mono bg-secondary border-border"
-                />
-              </div>
-            </div>
           </div>
-
-          {/* Save Button */}
-          <Button
-            onClick={handleSave}
-            disabled={!isConnected}
-            className="w-full gap-2"
-          >
-            <Save className="w-4 h-4" />
-            Save Settings
-          </Button>
           {!isConnected && (
             <p className="text-xs text-center text-muted-foreground">
-              Connect to device to save settings
+              Connect to device to autosave settings
             </p>
           )}
         </div>

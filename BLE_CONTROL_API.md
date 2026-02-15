@@ -17,15 +17,15 @@ This document is the frontend integration reference for controlling the slider o
 2. Connect.
 3. Discover service and the 3 characteristics.
 4. Enable notifications on:
-   - position/status characteristic
-   - response characteristic
+  - position/status characteristic
+  - response characteristic
 5. Keep command characteristic for writes.
 
 Recommended app behavior:
 
 - Send `{"cmd":"ping","requestId":"<id>"}` after connect.
-- Wait for response ack (`reason:"pong"`) before showing the device as fully ready.
-- Treat `sessionId` as connection generation; if it changes, reset app-side transient state.
+- Wait for response ack (`r:"pong"`) before showing the device as fully ready.
+- Treat `sid` as connection generation; if it changes, reset app-side transient state.
 
 ## Command JSON Contract
 
@@ -194,22 +194,43 @@ Note: legacy compatibility keys are removed. Use only the keys documented here.
 - `homingSpeed`: `> 0`
 - `timelapse2DelayMs`: `>= 0`
 
+Runtime limits are exposed in status as:
+
+- `mxl`: max speed upper bound enforced by firmware
+- `al`: acceleration upper bound enforced by firmware
+
+Frontend percentage mapping:
+
+- `maxSpeed = round(mxl * speedPct / 100)`
+- `acceleration = round(al * accelPct / 100)`
+
 ## Response Characteristic (ACK/NAK)
 
 Each processed command sends a response JSON on response characteristic.
+
+Short-key schema:
+
+- `ok`: success flag
+- `c`: command name
+- `r`: reason/result code
+- `rid`: request id echo (if sent)
+- `sid`: session id
+- `fw`: firmware version
+- `m`: current mode
+- `e`: current error string
 
 Example success:
 
 ```json
 {
   "ok": true,
-  "cmd": "mode",
-  "reason": "ok",
-  "requestId": "r42",
-  "sessionId": 7,
+  "c": "mode",
+  "r": "ok",
+  "rid": "r42",
+  "sid": 7,
   "fw": "0.1.0",
-  "mode": "timelapse2",
-  "error": ""
+  "m": "timelapse2",
+  "e": ""
 }
 ```
 
@@ -218,13 +239,13 @@ Example error:
 ```json
 {
   "ok": false,
-  "cmd": "mode",
-  "reason": "missing_target",
-  "requestId": "r43",
-  "sessionId": 7,
+  "c": "mode",
+  "r": "missing_target",
+  "rid": "r43",
+  "sid": 7,
   "fw": "0.1.0",
-  "mode": "idle",
-  "error": "missing_target"
+  "m": "idle",
+  "e": "missing_target"
 }
 ```
 
@@ -232,20 +253,38 @@ Example error:
 
 Status is published periodically via notify.
 
-Common fields:
+Short-key schema:
 
 - Runtime/control:
-  - `mode`, `error`, `target`, `velocityCmd`
-  - `sessionId`, `fw`
+  - `m` mode
+  - `e` error
+  - `p` current position
+  - `t` target position
+  - `v` commanded velocity
+  - `sid` session id
+  - `fw` firmware version
 - Position/calibration:
-  - `position`, `leftPoint`, `rightPoint`, `homed`
+  - `lp` left point
+  - `rp` right point
+  - `h` homed flag
 - Driver/config:
-  - `driverEnabled`, `microsteps`, `currentLimit`, `pdVoltage`, `standstillMode`
-  - `maxSpeed`, `acceleration`, `homingSpeed`, `gotoMaxVel`
-  - `timelapse1Vel`, `timelapse2Vel`, `move1Vel`
-  - `stepCount`, `stepsExecuted`, `timelapse2DelayMs`
-- Diagnostics:
-  - `aux2`, `controlSign`, `encoderRejected`, `encoderReadErrors`
+  - `de` driver enabled
+  - `ms` microsteps
+  - `cl` current limit
+  - `pv` PD voltage
+  - `sm` standstill mode
+  - `mx` max speed
+  - `mxl` max speed firmware limit
+  - `a` acceleration
+  - `al` acceleration firmware limit
+  - `hs` homing speed
+  - `gv` goto max velocity
+  - `t1v`, `t2v`, `m1v` mode velocities
+  - `sc` step count
+  - `se` steps executed
+  - `d2` timelapse2 trigger delay ms
+- IO:
+  - `x2` AUX2 input active
 
 ## Error Codes You Should Handle
 
@@ -266,6 +305,65 @@ Common fields:
 - `not_homed`
 - `step_timeout`
 - `invalid_endpoints`
+
+## Migration (v1 -> v2 Short Keys)
+
+Command payloads are unchanged (keep verbose keys like `pdVoltage`, `timelapse1Vel`, etc.).
+Only outbound response/status payload keys changed to shorter names.
+
+### Response key mapping
+
+- `cmd` -> `c`
+- `reason` -> `r`
+- `requestId` -> `rid`
+- `sessionId` -> `sid`
+- `mode` -> `m`
+- `error` -> `e`
+
+### Status key mapping
+
+- `mode` -> `m`
+- `error` -> `e`
+- `position` -> `p`
+- `target` -> `t`
+- `velocityCmd` -> `v`
+- `leftPoint` -> `lp`
+- `rightPoint` -> `rp`
+- `homed` -> `h`
+- `driverEnabled` -> `de`
+- `microsteps` -> `ms`
+- `currentLimit` -> `cl`
+- `pdVoltage` -> `pv`
+- `standstillMode` -> `sm`
+- `maxSpeed` -> `mx`
+- `maxSpeedLimit` -> `mxl`
+- `acceleration` -> `a`
+- `accelerationLimit` -> `al`
+- `homingSpeed` -> `hs`
+- `gotoMaxVel` -> `gv`
+- `timelapse1Vel` -> `t1v`
+- `timelapse2Vel` -> `t2v`
+- `move1Vel` -> `m1v`
+- `stepCount` -> `sc`
+- `stepsExecuted` -> `se`
+- `timelapse2DelayMs` -> `d2`
+- `sessionId` -> `sid`
+- `aux2` -> `x2`
+
+### Removed from periodic status
+
+- `gotoRemaining`
+- `gotoPlannedVel`
+- `controlSign`
+- `encoderRejected`
+- `encoderReadErrors`
+
+### Frontend migration checklist
+
+1. Update status parser to accept short keys.
+2. Update response parser to use `c/r/rid/sid/m/e`.
+3. Keep command payloads unchanged.
+4. Use `rid` for command correlation and `sid` for reconnect/session resets.
 
 ## Frontend Reliability Recommendations
 

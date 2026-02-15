@@ -1,10 +1,6 @@
-import { Target, Send, AlertTriangle } from "lucide-react";
+import { Target, AlertTriangle } from "lucide-react";
 import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Slider } from "@/components/ui/slider";
 import { PositionVisualization } from "@/components/PositionVisualization";
 import { SliderStatus } from "@/components/SliderStatus";
 import { useToast } from "@/hooks/use-toast";
@@ -14,15 +10,15 @@ export function PositionMode() {
   const { toast } = useToast();
   const isConnected = useSliderStore((s) => s.isConnected);
   const sliderState = useSliderStore((s) => s.sliderState);
-  const [targetPercent, setTargetPercent] = useState(0);
+  const [targetPercent, setTargetPercent] = useState<number | null>(null);
   const isCalibrated = sliderState.homed && sliderState.rightPoint > sliderState.leftPoint;
 
-  const onGoTo = async () => {
-    const success = await goToPercent(targetPercent, sliderState.gotoMaxVel);
+  const onGoTo = async (percent: number) => {
+    const success = await goToPercent(percent, sliderState.gotoMaxVel);
     if (success) {
       toast({
         title: "Goto sent",
-        description: `Moving to ${targetPercent.toFixed(1)}%`,
+        description: `Moving to ${percent.toFixed(1)}%`,
       });
     } else {
       toast({
@@ -53,6 +49,10 @@ export function PositionMode() {
             currentPosition={sliderState.position}
             pointA={0}
             pointB={100}
+            targetPercent={targetPercent}
+            interactive={isConnected && isCalibrated}
+            onSeekPreview={setTargetPercent}
+            onSeek={onGoTo}
           />
 
           {!isCalibrated && (
@@ -63,51 +63,6 @@ export function PositionMode() {
               </p>
             </div>
           )}
-
-          <div className="space-y-3">
-            <div className="flex justify-between">
-              <Label className="text-xs text-muted-foreground">Target Position</Label>
-              <span className="text-sm font-mono text-primary">
-                {targetPercent.toFixed(1)}%
-              </span>
-            </div>
-            <Slider
-              value={[targetPercent]}
-              onValueChange={([value]) => setTargetPercent(value)}
-              min={0}
-              max={100}
-              step={0.1}
-              disabled={!isConnected}
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label className="text-xs text-muted-foreground">Left Point (raw)</Label>
-              <Input
-                value={sliderState.leftPoint}
-                readOnly
-                className="font-mono bg-secondary border-border"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label className="text-xs text-muted-foreground">Right Point (raw)</Label>
-              <Input
-                value={sliderState.rightPoint}
-                readOnly
-                className="font-mono bg-secondary border-border"
-              />
-            </div>
-          </div>
-
-          <Button
-            onClick={onGoTo}
-            disabled={!isConnected || !isCalibrated}
-            className="w-full gap-2"
-          >
-            <Send className="w-4 h-4" />
-            Go To Target
-          </Button>
 
           {!isCalibrated && (
             <p className="text-xs text-center text-muted-foreground">

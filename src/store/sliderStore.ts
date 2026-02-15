@@ -8,6 +8,7 @@ const RESPONSE_CHARACTERISTIC_UUID = "12345678-1234-5678-1234-56789abcdef3";
 
 const DEFAULT_MAX_SPEED = 25000;
 const COMMAND_TIMEOUT_MS = 2000;
+const CONNECT_PING_TIMEOUT_MS = 3000;
 
 export enum StandstillMode {
   NORMAL = 0,
@@ -55,6 +56,7 @@ export interface SliderState {
   stepCount: number;
   stepsExecuted: number;
   aux2: boolean;
+  controlSign: number;
   encoderRejected: number;
   encoderReadErrors: number;
 
@@ -67,7 +69,9 @@ export interface SliderState {
   rightPoint: number;
 
   maxSpeed: number;
+  maxSpeedLimit: number;
   acceleration: number;
+  accelerationLimit: number;
   homingSpeed: number;
   gotoMaxVel: number;
   timelapse1Vel: number;
@@ -98,6 +102,12 @@ interface AckResponse {
   fw?: string;
   mode?: string;
   error?: string;
+  c?: string;
+  r?: string;
+  rid?: string;
+  sid?: number;
+  m?: string;
+  e?: string;
 }
 
 type CommandPayload = Record<string, unknown> & { cmd: string };
@@ -143,6 +153,7 @@ const DEFAULT_SLIDER_STATE: SliderState = {
   stepCount: 0,
   stepsExecuted: 0,
   aux2: false,
+  controlSign: 0,
   encoderRejected: 0,
   encoderReadErrors: 0,
 
@@ -155,7 +166,9 @@ const DEFAULT_SLIDER_STATE: SliderState = {
   rightPoint: 10000,
 
   maxSpeed: DEFAULT_MAX_SPEED,
+  maxSpeedLimit: DEFAULT_MAX_SPEED,
   acceleration: 180000,
+  accelerationLimit: 180000,
   homingSpeed: 9000,
   gotoMaxVel: 8000,
   timelapse1Vel: 6000,
@@ -193,8 +206,112 @@ const clearPendingCommands = (reason: string) => {
   pendingCommands.clear();
 };
 
+const resolveSinglePendingCommand = (response: AckResponse) => {
+  const pendingEntries = Array.from(pendingCommands.entries());
+  if (pendingEntries.length !== 1) {
+    return false;
+  }
+
+  const [requestId, pending] = pendingEntries[0];
+  clearTimeout(pending.timeoutId);
+  pendingCommands.delete(requestId);
+  pending.resolve(response);
+  return true;
+};
+
 const toUserError = (error: unknown, fallback: string) =>
   error instanceof Error ? error.message : fallback;
+
+const isNumber = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value);
+
+const isString = (value: unknown): value is string => typeof value === "string";
+
+const isBoolean = (value: unknown): value is boolean => typeof value === "boolean";
+
+const pickNumber = (source: Record<string, unknown>, keys: string[]): number | null => {
+  for (const key of keys) {
+    const value = source[key];
+    if (isNumber(value)) {
+      return value;
+    }
+  }
+  return null;
+};
+
+const pickString = (source: Record<string, unknown>, keys: string[]): string | null => {
+  for (const key of keys) {
+    const value = source[key];
+    if (isString(value)) {
+      return value;
+    }
+  }
+  return null;
+};
+
+const pickBoolean = (source: Record<string, unknown>, keys: string[]): boolean | null => {
+  for (const key of keys) {
+    const value = source[key];
+    if (isBoolean(value)) {
+      return value;
+    }
+  }
+  return null;
+};
+
+const isMicrostepsValue = (value: number): value is SliderState["microsteps"] =>
+  [1, 2, 4, 8, 16, 32, 64, 128, 256].includes(value);
+
+const isPdVoltageValue = (value: number): value is SliderState["pdVoltage"] =>
+  [5, 12, 15, 20].includes(value);
+
+const isStandstillModeValue = (value: number): value is StandstillMode =>
+  value >= 0 && value <= 3;
+
+const normalizeDriverStatus = (
+  value: unknown,
+  previous: DriverStatus,
+): DriverStatus | null => {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const raw = value as Record<string, unknown>;
+  const next: DriverStatus = { ...previous };
+  let changed = false;
+
+  const boolKeys: Array<Exclude<keyof DriverStatus, "current_scaling">> = [
+    "over_temperature_warning",
+    "over_temperature_shutdown",
+    "short_to_ground_a",
+    "short_to_ground_b",
+    "low_side_short_a",
+    "low_side_short_b",
+    "open_load_a",
+    "open_load_b",
+    "over_temperature_120c",
+    "over_temperature_143c",
+    "over_temperature_150c",
+    "over_temperature_157c",
+    "stealth_chop_mode",
+    "standstill",
+  ];
+
+  for (const key of boolKeys) {
+    const rawValue = raw[key as string];
+    if (isBoolean(rawValue)) {
+      next[key] = rawValue;
+      changed = true;
+    }
+  }
+
+  if (isNumber(raw.current_scaling)) {
+    next.current_scaling = raw.current_scaling;
+    changed = true;
+  }
+
+  return changed ? next : null;
+};
 
 const mapRawPositionToPercent = (position: number, leftPoint: number, rightPoint: number) => {
   const range = rightPoint - leftPoint;
@@ -226,39 +343,50 @@ const handleResponseNotification = (event: Event) => {
 
   try {
     const data = new TextDecoder().decode(value.buffer);
-    const parsed = JSON.parse(data) as AckResponse;
+    const parsed = JSON.parse(data) as Record<string, unknown>;
+    const response: AckResponse = {
+      ok: pickBoolean(parsed, ["ok"]) ?? undefined,
+      cmd: pickString(parsed, ["c", "cmd"]) ?? undefined,
+      reason: pickString(parsed, ["r", "reason"]) ?? undefined,
+      requestId: pickString(parsed, ["rid", "requestId"]) ?? undefined,
+      sessionId: pickNumber(parsed, ["sid", "sessionId"]) ?? undefined,
+      fw: pickString(parsed, ["fw"]) ?? undefined,
+      mode: pickString(parsed, ["m", "mode"]) ?? undefined,
+      error: pickString(parsed, ["e", "error"]) ?? undefined,
+    };
 
-    if (typeof parsed.sessionId === "number") {
-      onSessionChange(parsed.sessionId);
+    if (typeof response.sessionId === "number") {
+      onSessionChange(response.sessionId);
     }
 
-    if (typeof parsed.sessionId === "number" || parsed.fw || parsed.mode || parsed.error) {
+    if (typeof response.sessionId === "number" || response.fw || response.mode || response.error) {
       useSliderStore.setState((state) => ({
         sliderState: {
           ...state.sliderState,
           sessionId:
-            typeof parsed.sessionId === "number"
-              ? parsed.sessionId
+            typeof response.sessionId === "number"
+              ? response.sessionId
               : state.sliderState.sessionId,
-          fw: typeof parsed.fw === "string" ? parsed.fw : state.sliderState.fw,
-          mode: typeof parsed.mode === "string" ? parsed.mode : state.sliderState.mode,
-          error: typeof parsed.error === "string" ? parsed.error : state.sliderState.error,
+          fw: typeof response.fw === "string" ? response.fw : state.sliderState.fw,
+          mode: typeof response.mode === "string" ? response.mode : state.sliderState.mode,
+          error: typeof response.error === "string" ? response.error : state.sliderState.error,
         },
       }));
     }
 
-    if (!parsed.requestId) {
+    if (!response.requestId) {
+      resolveSinglePendingCommand(response);
       return;
     }
 
-    const pending = pendingCommands.get(parsed.requestId);
+    const pending = pendingCommands.get(response.requestId);
     if (!pending) {
       return;
     }
 
     clearTimeout(pending.timeoutId);
-    pendingCommands.delete(parsed.requestId);
-    pending.resolve(parsed);
+    pendingCommands.delete(response.requestId);
+    pending.resolve(response);
   } catch {
     useSliderStore.setState({ error: "Malformed BLE response payload" });
   }
@@ -266,57 +394,148 @@ const handleResponseNotification = (event: Event) => {
 
 const applyStatusUpdate = (payload: Record<string, unknown>) => {
   useSliderStore.setState((state) => {
-    const leftPoint =
-      typeof payload.leftPoint === "number"
-        ? payload.leftPoint
-        : state.sliderState.leftPoint;
-    const rightPoint =
-      typeof payload.rightPoint === "number"
-        ? payload.rightPoint
-        : state.sliderState.rightPoint;
-    const rawPosition =
-      typeof payload.position === "number"
-        ? payload.position
-        : mapRawPositionToPercent(state.sliderState.position, leftPoint, rightPoint);
-    const maxSpeed =
-      typeof payload.maxSpeed === "number"
-        ? payload.maxSpeed
-        : state.sliderState.maxSpeed;
+    const next: SliderState = { ...state.sliderState };
 
-    const velocityFromPayload =
-      typeof payload.velocity === "number"
-        ? payload.velocity
-        : typeof payload.velocityCmd === "number"
-          ? payload.velocityCmd
-          : null;
+    const sessionId = pickNumber(payload, ["sid", "sessionId"]);
+    if (sessionId !== null) {
+      onSessionChange(sessionId);
+      next.sessionId = sessionId;
+    }
 
-    if (typeof payload.sessionId === "number") {
-      onSessionChange(payload.sessionId);
+    const mode = pickString(payload, ["m", "mode"]);
+    if (mode !== null) next.mode = mode;
+
+    const fw = pickString(payload, ["fw"]);
+    if (fw !== null) next.fw = fw;
+
+    const error = pickString(payload, ["e", "error"]);
+    if (error !== null) next.error = error;
+
+    const leftPoint = pickNumber(payload, ["lp", "leftPoint"]);
+    if (leftPoint !== null) next.leftPoint = leftPoint;
+
+    const rightPoint = pickNumber(payload, ["rp", "rightPoint"]);
+    if (rightPoint !== null) next.rightPoint = rightPoint;
+
+    const homed = pickBoolean(payload, ["h", "homed"]);
+    if (homed !== null) next.homed = homed;
+
+    const driverEnabled = pickBoolean(payload, ["de", "driverEnabled"]);
+    if (driverEnabled !== null) next.driverEnabled = driverEnabled;
+
+    const aux2 = pickBoolean(payload, ["x2", "aux2"]);
+    if (aux2 !== null) next.aux2 = aux2;
+
+    const targetValue = pickNumber(payload, ["t", "target"]);
+    if (targetValue !== null) next.target = targetValue;
+
+    const stepCount = pickNumber(payload, ["sc", "stepCount"]);
+    if (stepCount !== null) next.stepCount = stepCount;
+
+    const stepsExecuted = pickNumber(payload, ["se", "stepsExecuted"]);
+    if (stepsExecuted !== null) next.stepsExecuted = stepsExecuted;
+
+    const controlSign = pickNumber(payload, ["controlSign"]);
+    if (controlSign !== null) next.controlSign = controlSign;
+
+    const encoderRejected = pickNumber(payload, ["encoderRejected"]);
+    if (encoderRejected !== null) next.encoderRejected = encoderRejected;
+
+    const encoderReadErrors = pickNumber(payload, ["encoderReadErrors"]);
+    if (encoderReadErrors !== null) next.encoderReadErrors = encoderReadErrors;
+
+    const stallGuardResult = pickNumber(payload, ["stallGuardResult"]);
+    if (stallGuardResult !== null) next.stallGuardResult = stallGuardResult;
+
+    const currentLimit = pickNumber(payload, ["cl", "currentLimit"]);
+    if (currentLimit !== null) next.currentLimit = currentLimit;
+
+    const stallThreshold = pickNumber(payload, ["stallThreshold"]);
+    if (stallThreshold !== null) next.stallThreshold = stallThreshold;
+
+    const microsteps = pickNumber(payload, ["ms", "microsteps"]);
+    if (microsteps !== null && isMicrostepsValue(microsteps)) {
+      next.microsteps = microsteps;
+    }
+
+    const pdVoltage = pickNumber(payload, ["pv", "pdVoltage"]);
+    if (pdVoltage !== null && isPdVoltageValue(pdVoltage)) {
+      next.pdVoltage = pdVoltage;
+    }
+
+    const standstillMode = pickNumber(payload, ["sm", "standstillMode"]);
+    if (standstillMode !== null && isStandstillModeValue(standstillMode)) {
+      next.standstillMode = standstillMode;
+    }
+
+    const maxSpeed = pickNumber(payload, ["mx", "maxSpeed"]);
+    if (maxSpeed !== null && maxSpeed > 0) next.maxSpeed = maxSpeed;
+
+    const maxSpeedLimit = pickNumber(payload, ["mxl", "maxSpeedLimit"]);
+    if (maxSpeedLimit !== null && maxSpeedLimit > 0) next.maxSpeedLimit = maxSpeedLimit;
+
+    const acceleration = pickNumber(payload, ["a", "acceleration"]);
+    if (acceleration !== null && acceleration >= 0) {
+      next.acceleration = acceleration;
+    }
+
+    const accelerationLimit = pickNumber(payload, ["al", "accelerationLimit"]);
+    if (accelerationLimit !== null && accelerationLimit > 0) {
+      next.accelerationLimit = accelerationLimit;
+    }
+
+    const homingSpeed = pickNumber(payload, ["hs", "homingSpeed"]);
+    if (homingSpeed !== null && homingSpeed > 0) {
+      next.homingSpeed = homingSpeed;
+    }
+
+    const gotoMaxVel = pickNumber(payload, ["gv", "gotoMaxVel"]);
+    if (gotoMaxVel !== null && gotoMaxVel > 0) {
+      next.gotoMaxVel = gotoMaxVel;
+    }
+
+    const timelapse1Vel = pickNumber(payload, ["t1v", "timelapse1Vel"]);
+    if (timelapse1Vel !== null && timelapse1Vel > 0) {
+      next.timelapse1Vel = timelapse1Vel;
+    }
+
+    const timelapse2Vel = pickNumber(payload, ["t2v", "timelapse2Vel"]);
+    if (timelapse2Vel !== null && timelapse2Vel > 0) {
+      next.timelapse2Vel = timelapse2Vel;
+    }
+
+    const move1Vel = pickNumber(payload, ["m1v", "move1Vel"]);
+    if (move1Vel !== null && move1Vel > 0) {
+      next.move1Vel = move1Vel;
+    }
+
+    const timelapse2DelayMs = pickNumber(payload, ["d2", "timelapse2DelayMs"]);
+    if (timelapse2DelayMs !== null && timelapse2DelayMs >= 0) {
+      next.timelapse2DelayMs = timelapse2DelayMs;
+    }
+
+    const driverStatus = normalizeDriverStatus(payload.driverStatus, next.driverStatus);
+    if (driverStatus) {
+      next.driverStatus = driverStatus;
+    }
+
+    const rawPosition = pickNumber(payload, ["p", "position"]);
+    if (rawPosition !== null) {
+      next.position = mapRawPositionToPercent(rawPosition, next.leftPoint, next.rightPoint);
+    }
+
+    const rawVelocity = pickNumber(payload, ["v", "velocityCmd", "velocity"]);
+
+    if (rawVelocity !== null) {
+      next.velocityCmd = rawVelocity;
+      next.velocity = mapRawVelocityToPercent(rawVelocity, next.maxSpeed);
+      next.isMoving = Math.abs(rawVelocity) > 0;
+    } else if (isBoolean(payload.isMoving)) {
+      next.isMoving = payload.isMoving;
     }
 
     return {
-      sliderState: {
-        ...state.sliderState,
-        ...payload,
-        leftPoint,
-        rightPoint,
-        maxSpeed,
-        position:
-          typeof payload.position === "number"
-            ? mapRawPositionToPercent(rawPosition, leftPoint, rightPoint)
-            : state.sliderState.position,
-        velocity:
-          typeof velocityFromPayload === "number"
-            ? mapRawVelocityToPercent(velocityFromPayload, maxSpeed)
-            : state.sliderState.velocity,
-        mode: typeof payload.mode === "string" ? payload.mode : state.sliderState.mode,
-        sessionId:
-          typeof payload.sessionId === "number"
-            ? payload.sessionId
-            : state.sliderState.sessionId,
-        fw: typeof payload.fw === "string" ? payload.fw : state.sliderState.fw,
-        error: typeof payload.error === "string" ? payload.error : state.sliderState.error,
-      },
+      sliderState: next,
     };
   });
 };
@@ -448,12 +667,12 @@ const connectToDevice = async (device: BluetoothDevice) => {
 
     deviceRef = device;
 
-    const pingOk = await executeCommand({ cmd: "ping" });
-    if (!pingOk) {
-      throw new Error("Ping failed after connect");
-    }
-
-    useSliderStore.setState({ isConnecting: false, isConnected: true, error: "" });
+    const pingOk = await executeCommand({ cmd: "ping" }, CONNECT_PING_TIMEOUT_MS);
+    useSliderStore.setState({
+      isConnecting: false,
+      isConnected: true,
+      error: pingOk ? "" : "Ping failed after connect, continuing with status sync",
+    });
   } catch (error) {
     cleanupConnection(toUserError(error, "Failed to connect"));
   }

@@ -14,7 +14,7 @@ export function Header({ onSettingsClick }: HeaderProps) {
     <header className="sticky top-0 z-50 w-full bg-background/95 backdrop-blur border-b border-border">
       <div className="container max-w-lg mx-auto px-4 h-14 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <img src="/favicon.png" alt="Camera Slider" className="w-8 h-8 rounded" />
+          <img src="/logo-mark.svg" alt="Camera Slider" className="w-8 h-8 rounded-md ring-1 ring-border/70" />
           <span className="font-semibold text-sm">Camera Slider</span>
         </div>
 
