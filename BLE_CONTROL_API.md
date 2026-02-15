@@ -96,23 +96,26 @@ Request:
   "start": 0,
   "end": 50000,
   "stepCount": 100,
-  "stepIntervalMs": 80,
-  "delay": 20,
-  "vel": 3000
+  "delay": 20
 }
 ```
 
-- Required: `start`, `end`, `stepCount`, `stepIntervalMs`
+- Required: `start`, `end`, `stepCount`
 - Optional:
   - `delay` (ms): wait after trigger before moving one step (default 20)
-  - `vel`: updates `timelapse2Vel`
+
+TL2 constants are configured in firmware code:
+
+- step velocity is fixed
+- step interval is fixed
 
 Timelapse2 trigger behavior:
 
-1. Detect AUX2 falling edge trigger.
-2. Enforce min trigger spacing (`stepIntervalMs`, and internal debounce).
-3. Wait `delay` ms.
-4. Move exactly one planned step.
+1. Move to `start` (A) using max speed profile.
+2. Detect AUX2 falling edge trigger.
+3. Enforce min trigger spacing (firmware step interval + internal debounce).
+4. Wait `delay` ms.
+5. Move exactly one planned step (`(B-A)/stepCount`, with remainder distribution).
 
 #### `calibrating`
 
@@ -175,7 +178,6 @@ Note: legacy compatibility keys are removed. Use only the keys documented here.
   "gotoMaxVel": 8000,
   "timelapse1TotalTimeMs": 120000,
   "timelapse1PingPong": true,
-  "timelapse2Vel": 3000,
   "timelapse2DelayMs": 20
 }
 ```
@@ -283,6 +285,7 @@ Short-key schema:
   - `hs` homing speed
   - `gv` goto max velocity
   - `t1v`, `t2v` mode velocities
+  - `t2i` timelapse2 step interval (ms)
   - `t1tm` timelapse1 total time (ms)
   - `t1pp` timelapse1 pingpong flag
   - `sc` step count
@@ -291,8 +294,10 @@ Short-key schema:
 - IO:
   - `x2` AUX2 input active
 
-Note: `t1v` is computed by firmware for each timelapse1 run from
-distance and `t1tm`.
+Notes:
+
+- `t1v` is computed by firmware for each timelapse1 run from distance and `t1tm`.
+- `t2v` and `t2i` are firmware constants.
 
 ## Error Codes You Should Handle
 
@@ -323,6 +328,7 @@ Only outbound response/status payload keys changed to shorter names.
 
 Timelapse1 update: `mode: timelapse1` now requires `totalTimeMs`.
 Move1 update: `mode: move1` is removed; use `timelapse1` with `pingpong: true`.
+Timelapse2 update: `stepIntervalMs` and `vel` are no longer accepted in command payloads (firmware constants).
 
 ### Response key mapping
 
@@ -358,6 +364,7 @@ Move1 update: `mode: move1` is removed; use `timelapse1` with `pingpong: true`.
 - `timelapse1TotalTimeMs` -> `t1tm`
 - `timelapse1PingPong` -> `t1pp`
 - `timelapse2Vel` -> `t2v`
+- `timelapse2StepIntervalMs` -> `t2i`
 - `stepCount` -> `sc`
 - `stepsExecuted` -> `se`
 - `timelapse2DelayMs` -> `d2`

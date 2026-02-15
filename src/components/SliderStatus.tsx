@@ -1,55 +1,6 @@
-import { Activity, Gauge, Zap, AlertTriangle, Power } from 'lucide-react';
+import { Gauge, Zap, AlertTriangle, Power } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { useSliderStore, DriverStatus } from '@/store/sliderStore';
-
-function StatusBadge({ active, label }: { active: boolean; label: string }) {
-  if (!active) return null;
-  return (
-    <Badge variant="destructive" className="text-xs">
-      {label}
-    </Badge>
-  );
-}
-
-function DriverStatusDisplay({ status }: { status: DriverStatus }) {
-  const hasErrors =
-    status.over_temperature_warning ||
-    status.over_temperature_shutdown ||
-    status.short_to_ground_a ||
-    status.short_to_ground_b ||
-    status.low_side_short_a ||
-    status.low_side_short_b ||
-    status.open_load_a ||
-    status.open_load_b;
-
-  if (!hasErrors && !status.stealth_chop_mode && status.standstill) {
-    return (
-      <div className="text-xs text-muted-foreground">
-        No issues • {status.standstill ? 'Standstill' : 'Moving'}
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-wrap gap-1">
-      <StatusBadge active={status.over_temperature_warning} label="Temp Warning" />
-      <StatusBadge active={status.over_temperature_shutdown} label="Temp Shutdown" />
-      <StatusBadge active={status.short_to_ground_a} label="Short A" />
-      <StatusBadge active={status.short_to_ground_b} label="Short B" />
-      <StatusBadge active={status.low_side_short_a} label="Low Short A" />
-      <StatusBadge active={status.low_side_short_b} label="Low Short B" />
-      <StatusBadge active={status.open_load_a} label="Open A" />
-      <StatusBadge active={status.open_load_b} label="Open B" />
-      {status.stealth_chop_mode && (
-        <Badge variant="secondary" className="text-xs">StealthChop</Badge>
-      )}
-      {status.standstill && (
-        <Badge variant="outline" className="text-xs">Standstill</Badge>
-      )}
-    </div>
-  );
-}
+import { useSliderStore } from '@/store/sliderStore';
 
 export function SliderStatus() {
   const activeMode = useSliderStore(s => s.activeMode);
@@ -75,30 +26,21 @@ export function SliderStatus() {
   const showTl1Markers = activeMode === 'timelapse1' && !!tl1Ui;
   const tl1Start = tl1Ui ? Math.max(0, Math.min(100, tl1Ui.startPercent)) : 0;
   const tl1End = tl1Ui ? Math.max(0, Math.min(100, tl1Ui.endPercent)) : 0;
+  const currentPercent = Math.max(0, Math.min(100, sliderState.position));
+  const velocityArrow = sliderState.velocity > 0.5 ? '←' : sliderState.velocity < -0.5 ? '→' : '•';
+  const velocityAbs = Math.abs(sliderState.velocity);
+  const isCalibrated = sliderState.homed && sliderState.rightPoint > sliderState.leftPoint;
 
   return (
     <Card className="bg-card/80 backdrop-blur border-border">
       <CardContent className="p-3">
         <div className="grid grid-cols-2 gap-3 text-sm">
-          {/* Position */}
-          <div className="flex items-center gap-2">
-            <Activity className="w-4 h-4 text-primary" />
-            <div>
-              <div className="text-xs text-muted-foreground">Position</div>
-              <div className="font-mono font-semibold">
-                {sliderState.position.toFixed(1)}%
-              </div>
-            </div>
-          </div>
-
           {/* Velocity */}
           <div className="flex items-center gap-2">
             <Gauge className="w-4 h-4 text-accent" />
             <div>
               <div className="text-xs text-muted-foreground">Velocity</div>
-              <div className="font-mono font-semibold">
-                {sliderState.velocity.toFixed(1)}%
-              </div>
+              <div className="font-mono font-semibold text-accent">{velocityArrow} {velocityAbs.toFixed(1)}%</div>
             </div>
           </div>
 
@@ -128,7 +70,7 @@ export function SliderStatus() {
           </div>
 
           {/* Stall Guard */}
-          <div className="flex items-center gap-2 col-span-2">
+          <div className="flex items-center gap-2">
             <AlertTriangle className="w-4 h-4 text-warning" />
             <div className="flex-1">
               <div className="text-xs text-muted-foreground">StallGuard Result</div>
@@ -136,18 +78,14 @@ export function SliderStatus() {
             </div>
           </div>
 
-          <div className="col-span-2 text-xs text-muted-foreground">
-            Calibration: {sliderState.homed ? 'Homed' : 'Not calibrated'}
-            {sliderState.stepCount > 0 && (
-              <span className="ml-2">• Steps {sliderState.stepsExecuted}/{sliderState.stepCount}</span>
-            )}
-          </div>
-
-          {/* Driver Status */}
-          <div className="col-span-2 border-t border-border pt-2 mt-1">
-            <div className="text-xs text-muted-foreground mb-1">Driver Status</div>
-            {/*<DriverStatusDisplay status={sliderState.driverStatus} />*/}
-          </div>
+          {!isCalibrated && (
+            <div className="col-span-2 flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 p-3 text-warning">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <p className="text-xs">
+                Slider is not calibrated. Open Settings and run calibration.
+              </p>
+            </div>
+          )}
 
           <div className="col-span-2 border-t border-border pt-3 mt-1 space-y-2">
             <div className="relative h-8 rounded-md bg-secondary overflow-hidden">
@@ -191,8 +129,14 @@ export function SliderStatus() {
               )}
               <div
                 className="absolute top-1 bottom-1 w-4 rounded-sm bg-accent transition-all duration-100"
-                style={{ left: `${Math.max(0, Math.min(100, sliderState.position))}%`, transform: 'translateX(-50%)' }}
+                style={{ left: `${currentPercent}%`, transform: 'translateX(-50%)' }}
               />
+              <div
+                className="absolute -top-5 -translate-x-1/2 text-[10px] font-mono font-semibold text-primary"
+                style={{ left: `${currentPercent}%` }}
+              >
+                {currentPercent.toFixed(1)}%
+              </div>
               {showGotoFill && (
                 <div
                   className="absolute top-0 bottom-0 w-0.5 bg-primary"
