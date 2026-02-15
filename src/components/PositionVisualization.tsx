@@ -7,7 +7,6 @@ interface PositionVisualizationProps {
   pointB: number;
   stepMarkers?: number[]; // For timelapse2 mode
   isRunning?: boolean;
-  targetPercent?: number | null;
   interactive?: boolean;
   onSeek?: (percent: number) => void;
   onSeekPreview?: (percent: number) => void;
@@ -20,7 +19,6 @@ export function PositionVisualization({
   pointB,
   stepMarkers = [],
   isRunning = false,
-  targetPercent = null,
   interactive = false,
   onSeek,
   onSeekPreview,
@@ -140,25 +138,6 @@ export function PositionVisualization({
           )}
           style={{ left: `${currentPercent}%`, transform: 'translateX(-50%)' }}
         />
-      </div>
-
-      <div className="relative mt-2 h-2 rounded-full bg-secondary/70">
-        <div
-          className="absolute inset-y-0 left-0 rounded-full bg-primary/20"
-          style={{ width: `${currentPercent}%` }}
-        />
-        {targetPercent !== null && (
-          <>
-            <div
-              className="absolute top-1/2 h-4 w-0.5 -translate-y-1/2 bg-primary"
-              style={{ left: `${targetPercent}%` }}
-            />
-            <div
-              className="absolute top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-background bg-primary"
-              style={{ left: `${targetPercent}%` }}
-            />
-          </>
-        )}
       </div>
 
       {/* Scale */}

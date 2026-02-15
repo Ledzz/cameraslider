@@ -86,6 +86,7 @@ interface VelocityModeState {
 
 interface SliderStore {
   activeMode: ActiveMode;
+  targetPercentUi: number | null;
   isConnected: boolean;
   isConnecting: boolean;
   error: string;
@@ -736,6 +737,10 @@ export const setActiveMode = (activeMode: ActiveMode) => {
   useSliderStore.setState({ activeMode });
 };
 
+export const setTargetPercentUi = (targetPercentUi: number | null) => {
+  useSliderStore.setState({ targetPercentUi });
+};
+
 export const updateSettings = (partialSetting: Partial<SliderState>) => {
   useSliderStore.setState((state) => ({
     sliderState: {
@@ -831,6 +836,9 @@ const percentToRawTarget = (percent: number) => {
 };
 
 export const goToPercent = async (percent: number, maxVel?: number) => {
+  const clampedPercent = clamp(percent, 0, 100);
+  setTargetPercentUi(clampedPercent);
+
   const target = percentToRawTarget(percent);
   if (target === null) {
     return false;
@@ -926,6 +934,7 @@ export const useSliderStore = create<SliderStore>()(
   persist(
     () => ({
       activeMode: "goto",
+      targetPercentUi: null,
       isConnected: false,
       isConnecting: false,
       error: "",

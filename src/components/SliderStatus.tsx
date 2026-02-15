@@ -53,6 +53,21 @@ function DriverStatusDisplay({ status }: { status: DriverStatus }) {
 
 export function SliderStatus() {
   const sliderState = useSliderStore(s => s.sliderState);
+  const targetPercentUi = useSliderStore(s => s.targetPercentUi);
+
+  const targetPercent = (() => {
+    if (typeof targetPercentUi === 'number') {
+      return Math.max(0, Math.min(100, targetPercentUi));
+    }
+
+    const range = sliderState.rightPoint - sliderState.leftPoint;
+    if (range > 0) {
+      const percent = ((sliderState.target - sliderState.leftPoint) / range) * 100;
+      return Math.max(0, Math.min(100, percent));
+    }
+
+    return Math.max(0, Math.min(100, sliderState.position));
+  })();
 
   return (
     <Card className="bg-card/80 backdrop-blur border-border">
@@ -125,6 +140,28 @@ export function SliderStatus() {
           <div className="col-span-2 border-t border-border pt-2 mt-1">
             <div className="text-xs text-muted-foreground mb-1">Driver Status</div>
             {/*<DriverStatusDisplay status={sliderState.driverStatus} />*/}
+          </div>
+
+          <div className="col-span-2 border-t border-border pt-3 mt-1 space-y-2">
+            <div className="flex justify-between">
+              <div className="text-xs text-muted-foreground">Target Position</div>
+              <span className="text-sm font-mono text-primary">{targetPercent.toFixed(1)}%</span>
+            </div>
+
+            <div className="relative h-8 rounded-md bg-secondary overflow-hidden">
+              <div
+                className="absolute inset-y-0 left-0 bg-primary/20"
+                style={{ width: `${targetPercent}%` }}
+              />
+              <div
+                className="absolute top-1 bottom-1 w-4 rounded-sm bg-accent transition-all duration-100"
+                style={{ left: `${Math.max(0, Math.min(100, sliderState.position))}%`, transform: 'translateX(-50%)' }}
+              />
+              <div
+                className="absolute top-0 bottom-0 w-0.5 bg-primary"
+                style={{ left: `${targetPercent}%` }}
+              />
+            </div>
           </div>
         </div>
       </CardContent>

@@ -1,17 +1,22 @@
 import { Target, AlertTriangle } from "lucide-react";
-import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { PositionVisualization } from "@/components/PositionVisualization";
+import { Label } from "@/components/ui/label";
+import { Slider } from "@/components/ui/slider";
 import { SliderStatus } from "@/components/SliderStatus";
 import { useToast } from "@/hooks/use-toast";
-import { goToPercent, useSliderStore } from "@/store/sliderStore";
+import { goToPercent, setTargetPercentUi, useSliderStore } from "@/store/sliderStore";
 
 export function PositionMode() {
   const { toast } = useToast();
   const isConnected = useSliderStore((s) => s.isConnected);
   const sliderState = useSliderStore((s) => s.sliderState);
-  const [targetPercent, setTargetPercent] = useState<number | null>(null);
+  const targetPercentUi = useSliderStore((s) => s.targetPercentUi);
   const isCalibrated = sliderState.homed && sliderState.rightPoint > sliderState.leftPoint;
+
+  const targetPercent =
+    typeof targetPercentUi === "number"
+      ? Math.max(0, Math.min(100, targetPercentUi))
+      : Math.max(0, Math.min(100, sliderState.position));
 
   const onGoTo = async (percent: number) => {
     const success = await goToPercent(percent, sliderState.gotoMaxVel);
@@ -45,15 +50,21 @@ export function PositionMode() {
         </CardHeader>
 
         <CardContent className="space-y-5">
-          <PositionVisualization
-            currentPosition={sliderState.position}
-            pointA={0}
-            pointB={100}
-            targetPercent={targetPercent}
-            interactive={isConnected && isCalibrated}
-            onSeekPreview={setTargetPercent}
-            onSeek={onGoTo}
-          />
+          <div className="space-y-3">
+            <div className="flex justify-between">
+              <Label className="text-xs text-muted-foreground">Target Position</Label>
+              <span className="text-sm font-mono text-primary">{targetPercent.toFixed(1)}%</span>
+            </div>
+            <Slider
+              value={[targetPercent]}
+              onValueChange={([v]) => setTargetPercentUi(v)}
+              onValueCommit={([v]) => onGoTo(v)}
+              min={0}
+              max={100}
+              step={0.1}
+              disabled={!isConnected || !isCalibrated}
+            />
+          </div>
 
           {!isCalibrated && (
             <div className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 p-3 text-warning">

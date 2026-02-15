@@ -60,7 +60,7 @@ Response `reason` will be `pong`.
 Request:
 
 ```json
-{ "cmd": "mode", "mode": "idle|free|goto|timelapse1|timelapse2|move1|calibrating" }
+{ "cmd": "mode", "mode": "idle|velocity|goto|timelapse1|timelapse2|move1|calibrating" }
 ```
 
 #### `goto`
@@ -130,7 +130,7 @@ Timelapse2 trigger behavior:
 { "cmd": "velocity", "vel": 1500 }
 ```
 
-- Sets mode to `free` and applies speed.
+- Sets mode to `velocity` and applies speed.
 
 ### 4) Acceleration Shortcut
 
