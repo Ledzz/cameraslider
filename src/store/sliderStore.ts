@@ -18,7 +18,7 @@ export enum StandstillMode {
 
 export type PlayMode = "ping-pong" | "loop";
 export type TriggerMode = "button" | "timeout";
-export type ActiveMode = "position" | "velocity";
+export type ActiveMode = "goto" | "timelapse1" | "timelapse2" | "move1" | "velocity";
 
 export interface DriverStatus {
   over_temperature_warning: boolean;
@@ -52,6 +52,11 @@ export interface SliderState {
   error: string;
   target: number;
   velocityCmd: number;
+  stepCount: number;
+  stepsExecuted: number;
+  aux2: boolean;
+  encoderRejected: number;
+  encoderReadErrors: number;
 
   currentLimit: number;
   stallThreshold: number;
@@ -135,6 +140,11 @@ const DEFAULT_SLIDER_STATE: SliderState = {
   error: "",
   target: 0,
   velocityCmd: 0,
+  stepCount: 0,
+  stepsExecuted: 0,
+  aux2: false,
+  encoderRejected: 0,
+  encoderReadErrors: 0,
 
   currentLimit: 50,
   stallThreshold: 50,
@@ -565,33 +575,48 @@ export const setVelocity = async ({ velocity }: { velocity: number }) => {
 
 export const stop = async () => executeCommand({ cmd: "stop" });
 
+export const setModeIdle = async () => executeCommand({ cmd: "mode", mode: "idle" });
+
+export const setModeFree = async () => executeCommand({ cmd: "mode", mode: "free" });
+
+export const setAcceleration = async (acc: number) => {
+  const safeAcc = Math.max(0, Math.round(acc));
+  return executeCommand({ cmd: "acc", acc: safeAcc });
+};
+
 export const startCalibration = async () =>
   executeCommand({
     cmd: "mode",
     mode: "calibrating",
   });
 
-export const goToPercent = async (percent: number, maxVel?: number) => {
+const percentToRawTarget = (percent: number) => {
   const state = useSliderStore.getState().sliderState;
   const leftPoint = state.leftPoint;
   const rightPoint = state.rightPoint;
 
   if (!state.homed) {
-    useSliderStore.setState({
-      error: "Slider is not calibrated yet.",
-    });
-    return false;
+    useSliderStore.setState({ error: "Slider is not calibrated yet." });
+    return null;
   }
 
   if (rightPoint <= leftPoint) {
     useSliderStore.setState({
       error: "Invalid calibration range. Set left/right points first.",
     });
-    return false;
+    return null;
   }
 
   const clamped = clamp(percent, 0, 100);
-  const target = Math.round(leftPoint + ((rightPoint - leftPoint) * clamped) / 100);
+  return Math.round(leftPoint + ((rightPoint - leftPoint) * clamped) / 100);
+};
+
+export const goToPercent = async (percent: number, maxVel?: number) => {
+  const target = percentToRawTarget(percent);
+  if (target === null) {
+    return false;
+  }
+
   const payload: CommandPayload = {
     cmd: "mode",
     mode: "goto",
@@ -605,10 +630,83 @@ export const goToPercent = async (percent: number, maxVel?: number) => {
   return executeCommand(payload);
 };
 
+export const startTimelapse1 = async (params: {
+  startPercent: number;
+  endPercent: number;
+  vel?: number;
+}) => {
+  const start = percentToRawTarget(params.startPercent);
+  const end = percentToRawTarget(params.endPercent);
+  if (start === null || end === null) {
+    return false;
+  }
+
+  const payload: CommandPayload = {
+    cmd: "mode",
+    mode: "timelapse1",
+    start,
+    end,
+  };
+
+  if (typeof params.vel === "number" && params.vel > 0) {
+    payload.vel = Math.round(params.vel);
+  }
+
+  return executeCommand(payload);
+};
+
+export const startTimelapse2 = async (params: {
+  startPercent: number;
+  endPercent: number;
+  stepCount: number;
+  stepIntervalMs: number;
+  delay?: number;
+  vel?: number;
+}) => {
+  const start = percentToRawTarget(params.startPercent);
+  const end = percentToRawTarget(params.endPercent);
+  if (start === null || end === null) {
+    return false;
+  }
+
+  const safeStepCount = Math.max(1, Math.round(params.stepCount));
+  const safeStepIntervalMs = Math.max(1, Math.round(params.stepIntervalMs));
+  const safeDelay = Math.max(0, Math.round(params.delay ?? 20));
+
+  const payload: CommandPayload = {
+    cmd: "mode",
+    mode: "timelapse2",
+    start,
+    end,
+    stepCount: safeStepCount,
+    stepIntervalMs: safeStepIntervalMs,
+    delay: safeDelay,
+  };
+
+  if (typeof params.vel === "number" && params.vel > 0) {
+    payload.vel = Math.round(params.vel);
+  }
+
+  return executeCommand(payload);
+};
+
+export const startMove1 = async (params?: { vel?: number }) => {
+  const payload: CommandPayload = {
+    cmd: "mode",
+    mode: "move1",
+  };
+
+  if (typeof params?.vel === "number" && params.vel > 0) {
+    payload.vel = Math.round(params.vel);
+  }
+
+  return executeCommand(payload);
+};
+
 export const useSliderStore = create<SliderStore>()(
   persist(
     () => ({
-      activeMode: "position",
+      activeMode: "goto",
       isConnected: false,
       isConnecting: false,
       error: "",

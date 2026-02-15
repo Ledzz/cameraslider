@@ -2,6 +2,9 @@ import {useEffect, useState} from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Header } from '@/components/Header';
 import { PositionMode } from '@/components/modes/PositionMode';
+import { Timelapse1Mode } from '@/components/modes/Timelapse1Mode';
+import { Timelapse2Mode } from '@/components/modes/Timelapse2Mode';
+import { Move1Mode } from '@/components/modes/Move1Mode';
 import { VelocityMode } from '@/components/modes/VelocityMode';
 import { SettingsDialog } from '@/components/settings/SettingsDialog';
 import {useSliderStore, ActiveMode, autoConnect, setActiveMode} from '@/store/sliderStore';
@@ -29,17 +32,38 @@ const Index = () => {
         )}
 
         <Tabs value={activeMode} onValueChange={(v) => setActiveMode(v as ActiveMode)}>
-          <TabsList className="bg-secondary w-full mb-4">
-            <TabsTrigger value="position" className="flex-1 text-xs">
-              Position
+          <TabsList className="grid w-full grid-cols-5 bg-secondary mb-4">
+            <TabsTrigger value="goto" className="flex-1 text-xs">
+              Goto
+            </TabsTrigger>
+            <TabsTrigger value="timelapse1" className="flex-1 text-xs">
+              TL1
+            </TabsTrigger>
+            <TabsTrigger value="timelapse2" className="flex-1 text-xs">
+              TL2
+            </TabsTrigger>
+            <TabsTrigger value="move1" className="flex-1 text-xs">
+              Move1
             </TabsTrigger>
             <TabsTrigger value="velocity" className="flex-1 text-xs">
               Velocity
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="position" className="mt-0">
+          <TabsContent value="goto" className="mt-0">
             <PositionMode />
+          </TabsContent>
+
+          <TabsContent value="timelapse1" className="mt-0">
+            <Timelapse1Mode />
+          </TabsContent>
+
+          <TabsContent value="timelapse2" className="mt-0">
+            <Timelapse2Mode />
+          </TabsContent>
+
+          <TabsContent value="move1" className="mt-0">
+            <Move1Mode />
           </TabsContent>
 
           <TabsContent value="velocity" className="mt-0">

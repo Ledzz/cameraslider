@@ -53,8 +53,6 @@ function DriverStatusDisplay({ status }: { status: DriverStatus }) {
 
 export function SliderStatus() {
   const sliderState = useSliderStore(s => s.sliderState);
-  const isConnected = useSliderStore(s => s.isConnected);
-  const activeMode = useSliderStore(s => s.activeMode);
 
   return (
     <Card className="bg-card/80 backdrop-blur border-border">
@@ -88,7 +86,7 @@ export function SliderStatus() {
             <div>
               <div className="text-xs text-muted-foreground">Mode</div>
               <div className="font-medium capitalize">
-                {activeMode}
+                {sliderState.mode || "idle"}
                 {sliderState.isMoving && (
                   <span className="ml-1 text-xs text-primary animate-pulse">• Moving</span>
                 )}
@@ -114,6 +112,13 @@ export function SliderStatus() {
               <div className="text-xs text-muted-foreground">StallGuard Result</div>
               <div className="font-mono">{sliderState.stallGuardResult}</div>
             </div>
+          </div>
+
+          <div className="col-span-2 text-xs text-muted-foreground">
+            Calibration: {sliderState.homed ? 'Homed' : 'Not calibrated'}
+            {sliderState.stepCount > 0 && (
+              <span className="ml-2">• Steps {sliderState.stepsExecuted}/{sliderState.stepCount}</span>
+            )}
           </div>
 
           {/* Driver Status */}
