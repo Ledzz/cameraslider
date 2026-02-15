@@ -1,10 +1,17 @@
-import { Gauge, Square } from "lucide-react";
+import { Gauge, Play, Square } from "lucide-react";
 import { useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
-import { resetVelocityTarget, setVelocity, setEnabled, stop, useSliderStore } from "@/store/sliderStore";
+import {
+  resetVelocityTarget,
+  setVelocity,
+  setVelocityTarget,
+  setEnabled,
+  stop,
+  useSliderStore,
+} from "@/store/sliderStore";
 import { SliderStatus } from "@/components/SliderStatus";
 import { useToast } from "@/hooks/use-toast";
 
@@ -26,17 +33,15 @@ export function VelocityMode() {
     }
   }, [activeMode, isConnected]);
 
-  const runAction = async (action: () => Promise<boolean>, successTitle: string, failTitle: string) => {
-    const success = await action();
+  const isRunning = sliderState.mode === "velocity" && sliderState.isMoving;
+
+  const handleStart = async () => {
+    await setEnabled(true);
+    const success = await setVelocity({ velocity: velocityMode.speed });
     toast({
-      title: success ? successTitle : failTitle,
+      title: success ? "Started" : "Start failed",
       variant: success ? "default" : "destructive",
     });
-  };
-
-  const handleSpeedChange = async (value: number) => {
-    await setEnabled(true);
-    await setVelocity({ velocity: value });
   };
 
   const handleStop = async () => {
@@ -71,7 +76,7 @@ export function VelocityMode() {
             </div>
             <Slider
               value={[velocityMode.speed]}
-              onValueChange={([v]) => handleSpeedChange(v)}
+              onValueChange={([v]) => setVelocityTarget(v)}
               min={-100}
               max={100}
               step={1}
@@ -79,15 +84,26 @@ export function VelocityMode() {
             />
           </div>
 
-          <Button
-            variant="destructive"
-            disabled={!isConnected || !sliderState.isMoving}
-            onClick={handleStop}
-            className="w-full gap-2"
-          >
-            <Square className="w-4 h-4" />
-            Stop
-          </Button>
+          {isRunning ? (
+            <Button
+              variant="destructive"
+              disabled={!isConnected}
+              onClick={handleStop}
+              className="w-full gap-2"
+            >
+              <Square className="w-4 h-4" />
+              Stop
+            </Button>
+          ) : (
+            <Button
+              disabled={!isConnected || velocityMode.speed === 0}
+              onClick={handleStart}
+              className="w-full gap-2"
+            >
+              <Play className="w-4 h-4" />
+              Start
+            </Button>
+          )}
         </CardContent>
       </Card>
     </div>

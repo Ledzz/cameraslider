@@ -89,6 +89,7 @@ interface SliderStore {
   activeMode: ActiveMode;
   targetPercentUi: number | null;
   tl1Ui: { startPercent: number; endPercent: number } | null;
+  tl2Ui: { startPercent: number; endPercent: number } | null;
   isConnected: boolean;
   isConnecting: boolean;
   error: string;
@@ -762,6 +763,19 @@ export const clearTl1Ui = () => {
   useSliderStore.setState({ tl1Ui: null });
 };
 
+export const setTl2Ui = (startPercent: number, endPercent: number) => {
+  useSliderStore.setState({
+    tl2Ui: {
+      startPercent: clamp(startPercent, 0, 100),
+      endPercent: clamp(endPercent, 0, 100),
+    },
+  });
+};
+
+export const clearTl2Ui = () => {
+  useSliderStore.setState({ tl2Ui: null });
+};
+
 export const updateSettings = (partialSetting: Partial<SliderState>) => {
   useSliderStore.setState((state) => ({
     sliderState: {
@@ -786,7 +800,6 @@ export const saveSettingsToDevice = async () => {
     gotoMaxVel: s.gotoMaxVel,
     timelapse1TotalTimeMs: s.timelapse1TotalTimeMs,
     timelapse1PingPong: s.timelapse1PingPong,
-    timelapse2Vel: s.timelapse2Vel,
     timelapse2DelayMs: s.timelapse2DelayMs,
   });
 };
@@ -816,6 +829,13 @@ export const setVelocity = async ({ velocity }: { velocity: number }) => {
     }));
   }
   return success;
+};
+
+export const setVelocityTarget = (velocity: number) => {
+  const clamped = clamp(velocity, -100, 100);
+  useSliderStore.setState((state) => ({
+    velocityMode: { ...state.velocityMode, speed: clamped },
+  }));
 };
 
 export const resetVelocityTarget = () => {
@@ -923,9 +943,7 @@ export const startTimelapse2 = async (params: {
   startPercent: number;
   endPercent: number;
   stepCount: number;
-  stepIntervalMs: number;
   delay?: number;
-  vel?: number;
 }) => {
   const start = percentToRawTarget(params.startPercent);
   const end = percentToRawTarget(params.endPercent);
@@ -934,7 +952,6 @@ export const startTimelapse2 = async (params: {
   }
 
   const safeStepCount = Math.max(1, Math.round(params.stepCount));
-  const safeStepIntervalMs = Math.max(1, Math.round(params.stepIntervalMs));
   const safeDelay = Math.max(0, Math.round(params.delay ?? 20));
 
   const payload: CommandPayload = {
@@ -943,13 +960,8 @@ export const startTimelapse2 = async (params: {
     start,
     end,
     stepCount: safeStepCount,
-    stepIntervalMs: safeStepIntervalMs,
     delay: safeDelay,
   };
-
-  if (typeof params.vel === "number" && params.vel > 0) {
-    payload.vel = Math.round(params.vel);
-  }
 
   return executeCommand(payload);
 };
@@ -960,6 +972,7 @@ export const useSliderStore = create<SliderStore>()(
       activeMode: "goto",
       targetPercentUi: null,
       tl1Ui: null,
+      tl2Ui: null,
       isConnected: false,
       isConnecting: false,
       error: "",

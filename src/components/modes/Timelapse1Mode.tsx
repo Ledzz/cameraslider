@@ -49,6 +49,7 @@ export function Timelapse1Mode() {
   const movementDirRef = useRef<number | null>(null);
 
   const totalTimeMs = Math.max(1000, Math.round(totalSeconds) * 1000);
+  const isRunning = sliderState.mode === "timelapse1";
 
   useEffect(() => {
     setTl1Ui(startPercent, endPercent);
@@ -289,16 +290,17 @@ export function Timelapse1Mode() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <Button onClick={handleStart} disabled={!isConnected || !isCalibrated || totalSeconds < 1} className="gap-2">
-              <Play className="w-4 h-4" />
-              Start
-            </Button>
-            <Button variant="destructive" onClick={handleStop} disabled={!isConnected} className="gap-2">
+          {isRunning ? (
+            <Button variant="destructive" onClick={handleStop} disabled={!isConnected} className="w-full gap-2">
               <Square className="w-4 h-4" />
               Stop
             </Button>
-          </div>
+          ) : (
+            <Button onClick={handleStart} disabled={!isConnected || !isCalibrated || totalSeconds < 1} className="w-full gap-2">
+              <Play className="w-4 h-4" />
+              Start
+            </Button>
+          )}
         </CardContent>
       </Card>
     </div>

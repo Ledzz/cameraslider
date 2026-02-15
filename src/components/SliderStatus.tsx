@@ -1,12 +1,15 @@
 import { Gauge, Zap, AlertTriangle, Power } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
-import { useSliderStore } from '@/store/sliderStore';
+import { Button } from '@/components/ui/button';
+import { startCalibration, stop, useSliderStore } from '@/store/sliderStore';
 
 export function SliderStatus() {
   const activeMode = useSliderStore(s => s.activeMode);
   const sliderState = useSliderStore(s => s.sliderState);
+  const isConnected = useSliderStore(s => s.isConnected);
   const targetPercentUi = useSliderStore(s => s.targetPercentUi);
   const tl1Ui = useSliderStore(s => s.tl1Ui);
+  const tl2Ui = useSliderStore(s => s.tl2Ui);
 
   const targetPercent = (() => {
     if (typeof targetPercentUi === 'number') {
@@ -24,12 +27,22 @@ export function SliderStatus() {
 
   const showGotoFill = activeMode === 'goto' && sliderState.mode === 'goto' && sliderState.isMoving;
   const showTl1Markers = activeMode === 'timelapse1' && !!tl1Ui;
-  const tl1Start = tl1Ui ? Math.max(0, Math.min(100, tl1Ui.startPercent)) : 0;
-  const tl1End = tl1Ui ? Math.max(0, Math.min(100, tl1Ui.endPercent)) : 0;
+  const showTl2Markers = activeMode === 'timelapse2' && !!tl2Ui;
+  const markerStart = showTl1Markers
+    ? Math.max(0, Math.min(100, tl1Ui.startPercent))
+    : showTl2Markers
+      ? Math.max(0, Math.min(100, tl2Ui.startPercent))
+      : 0;
+  const markerEnd = showTl1Markers
+    ? Math.max(0, Math.min(100, tl1Ui.endPercent))
+    : showTl2Markers
+      ? Math.max(0, Math.min(100, tl2Ui.endPercent))
+      : 0;
   const currentPercent = Math.max(0, Math.min(100, sliderState.position));
   const velocityArrow = sliderState.velocity > 0.5 ? '←' : sliderState.velocity < -0.5 ? '→' : '•';
   const velocityAbs = Math.abs(sliderState.velocity);
   const isCalibrated = sliderState.homed && sliderState.rightPoint > sliderState.leftPoint;
+  const isCalibrating = sliderState.mode === 'calibrating';
 
   return (
     <Card className="bg-card/80 backdrop-blur border-border">
@@ -79,45 +92,54 @@ export function SliderStatus() {
           </div>
 
           {!isCalibrated && (
-            <div className="col-span-2 flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 p-3 text-warning">
+            <div className="col-span-2 flex items-start justify-between gap-3 rounded-md border border-warning/40 bg-warning/10 p-3 text-warning">
+              <div className="flex items-start gap-2">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
               <p className="text-xs">
                 Slider is not calibrated. Open Settings and run calibration.
               </p>
+              </div>
+              <Button
+                size="sm"
+                variant={isCalibrating ? 'destructive' : 'secondary'}
+                disabled={!isConnected}
+                onClick={() => {
+                  void (isCalibrating ? stop() : startCalibration());
+                }}
+                className="h-7 px-2"
+              >
+                {isCalibrating ? 'Stop' : 'Calibrate'}
+              </Button>
             </div>
           )}
 
           <div className="col-span-2 border-t border-border pt-3 mt-1 space-y-2">
-            <div className="relative h-8 rounded-md bg-secondary overflow-hidden">
-              {showTl1Markers && (
+            <div className="relative">
+              <div
+                className="absolute -top-[18px] -translate-x-1/2 text-[10px] font-mono font-semibold text-primary"
+                style={{ left: `${currentPercent}%` }}
+              >
+                {currentPercent.toFixed(1)}%
+              </div>
+
+              <div className="relative h-8 rounded-md bg-secondary overflow-hidden">
+              {(showTl1Markers || showTl2Markers) && (
                 <>
                   <div
                     className="absolute inset-y-0 bg-primary/10"
                     style={{
-                      left: `${Math.min(tl1Start, tl1End)}%`,
-                      width: `${Math.abs(tl1End - tl1Start)}%`,
+                      left: `${Math.min(markerStart, markerEnd)}%`,
+                      width: `${Math.abs(markerEnd - markerStart)}%`,
                     }}
                   />
                   <div
                     className="absolute top-0 bottom-0 w-0.5 bg-point-a"
-                    style={{ left: `${tl1Start}%` }}
+                    style={{ left: `${markerStart}%` }}
                   />
                   <div
                     className="absolute top-0 bottom-0 w-0.5 bg-point-b"
-                    style={{ left: `${tl1End}%` }}
+                    style={{ left: `${markerEnd}%` }}
                   />
-                  <div
-                    className="absolute top-0 -translate-x-1/2 text-[10px] font-bold text-point-a"
-                    style={{ left: `${tl1Start}%` }}
-                  >
-                    A
-                  </div>
-                  <div
-                    className="absolute top-0 -translate-x-1/2 text-[10px] font-bold text-point-b"
-                    style={{ left: `${tl1End}%` }}
-                  >
-                    B
-                  </div>
                 </>
               )}
 
@@ -131,18 +153,13 @@ export function SliderStatus() {
                 className="absolute top-1 bottom-1 w-4 rounded-sm bg-accent transition-all duration-100"
                 style={{ left: `${currentPercent}%`, transform: 'translateX(-50%)' }}
               />
-              <div
-                className="absolute -top-5 -translate-x-1/2 text-[10px] font-mono font-semibold text-primary"
-                style={{ left: `${currentPercent}%` }}
-              >
-                {currentPercent.toFixed(1)}%
-              </div>
               {showGotoFill && (
                 <div
                   className="absolute top-0 bottom-0 w-0.5 bg-primary"
                   style={{ left: `${targetPercent}%` }}
                 />
               )}
+              </div>
             </div>
           </div>
         </div>

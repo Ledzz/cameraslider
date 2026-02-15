@@ -1,13 +1,12 @@
 import { Camera, Play, Square, AlertTriangle } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Input } from "@/components/ui/input";
-import { PositionVisualization } from "@/components/PositionVisualization";
 import { SliderStatus } from "@/components/SliderStatus";
-import { startTimelapse2, stop, useSliderStore } from "@/store/sliderStore";
+import { clearTl2Ui, setTl2Ui, startTimelapse2, stop, useSliderStore } from "@/store/sliderStore";
 import { useToast } from "@/hooks/use-toast";
 
 export function Timelapse2Mode() {
@@ -19,23 +18,30 @@ export function Timelapse2Mode() {
   const [startPercent, setStartPercent] = useState(0);
   const [endPercent, setEndPercent] = useState(100);
   const [stepCount, setStepCount] = useState(100);
-  const [stepIntervalMs, setStepIntervalMs] = useState(80);
   const [delay, setDelay] = useState(sliderState.timelapse2DelayMs || 20);
-  const [velocity, setVelocity] = useState(sliderState.timelapse2Vel);
+  const isRunning = sliderState.mode === "timelapse2";
+
+  useEffect(() => {
+    setTl2Ui(startPercent, endPercent);
+  }, [startPercent, endPercent]);
+
+  useEffect(() => {
+    return () => {
+      clearTl2Ui();
+    };
+  }, []);
 
   const handleStart = async () => {
     const success = await startTimelapse2({
       startPercent,
       endPercent,
       stepCount,
-      stepIntervalMs,
       delay,
-      vel: velocity,
     });
 
     toast({
       title: success ? "Timelapse2 started" : "Timelapse2 failed",
-      description: success ? `Steps: ${stepCount}, interval: ${stepIntervalMs}ms` : "Command was rejected by device",
+      description: success ? `Steps: ${stepCount}` : "Command was rejected by device",
       variant: success ? "default" : "destructive",
     });
   };
@@ -62,8 +68,6 @@ export function Timelapse2Mode() {
         </CardHeader>
 
         <CardContent className="space-y-5">
-          <PositionVisualization currentPosition={sliderState.position} pointA={startPercent} pointB={endPercent} />
-
           {!isCalibrated && (
             <div className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 p-3 text-warning">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -71,15 +75,20 @@ export function Timelapse2Mode() {
             </div>
           )}
 
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label className="text-xs text-muted-foreground">Start %</Label>
-              <Slider value={[startPercent]} onValueChange={([v]) => setStartPercent(v)} min={0} max={100} step={0.1} />
+          <div className="space-y-2">
+            <div className="flex justify-between">
+              <Label className="text-xs text-muted-foreground">Start</Label>
+              <span className="text-xs font-mono text-primary">{startPercent.toFixed(1)}%</span>
             </div>
-            <div className="space-y-2">
-              <Label className="text-xs text-muted-foreground">End %</Label>
-              <Slider value={[endPercent]} onValueChange={([v]) => setEndPercent(v)} min={0} max={100} step={0.1} />
+            <Slider value={[startPercent]} onValueChange={([v]) => setStartPercent(v)} min={0} max={100} step={0.1} />
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex justify-between">
+              <Label className="text-xs text-muted-foreground">End</Label>
+              <span className="text-xs font-mono text-primary">{endPercent.toFixed(1)}%</span>
             </div>
+            <Slider value={[endPercent]} onValueChange={([v]) => setEndPercent(v)} min={0} max={100} step={0.1} />
           </div>
 
           <div className="grid grid-cols-2 gap-4">
@@ -88,19 +97,8 @@ export function Timelapse2Mode() {
               <Input type="number" min={1} value={stepCount} onChange={(e) => setStepCount(Number(e.target.value) || 1)} className="bg-secondary border-border font-mono" />
             </div>
             <div className="space-y-2">
-              <Label className="text-xs text-muted-foreground">Step Interval (ms)</Label>
-              <Input type="number" min={1} value={stepIntervalMs} onChange={(e) => setStepIntervalMs(Number(e.target.value) || 1)} className="bg-secondary border-border font-mono" />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
               <Label className="text-xs text-muted-foreground">Delay (ms)</Label>
               <Input type="number" min={0} value={delay} onChange={(e) => setDelay(Number(e.target.value) || 0)} className="bg-secondary border-border font-mono" />
-            </div>
-            <div className="space-y-2">
-              <Label className="text-xs text-muted-foreground">Velocity (raw)</Label>
-              <Input type="number" min={1} value={velocity} onChange={(e) => setVelocity(Number(e.target.value) || 0)} className="bg-secondary border-border font-mono" />
             </div>
           </div>
 
@@ -108,16 +106,17 @@ export function Timelapse2Mode() {
             Progress: {sliderState.stepsExecuted} / {sliderState.stepCount || stepCount}
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <Button onClick={handleStart} disabled={!isConnected || !isCalibrated} className="gap-2">
-              <Play className="w-4 h-4" />
-              Start
-            </Button>
-            <Button variant="destructive" onClick={handleStop} disabled={!isConnected} className="gap-2">
+          {isRunning ? (
+            <Button variant="destructive" onClick={handleStop} disabled={!isConnected} className="w-full gap-2">
               <Square className="w-4 h-4" />
               Stop
             </Button>
-          </div>
+          ) : (
+            <Button onClick={handleStart} disabled={!isConnected || !isCalibrated} className="w-full gap-2">
+              <Play className="w-4 h-4" />
+              Start
+            </Button>
+          )}
         </CardContent>
       </Card>
     </div>

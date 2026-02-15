@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import {useSliderStore, StandstillMode, saveSettingsToDevice, disconnect, updateSettings, startCalibration} from '@/store/sliderStore';
+import {useSliderStore, StandstillMode, saveSettingsToDevice, disconnect, updateSettings, startCalibration, stop} from '@/store/sliderStore';
 import { useToast } from '@/hooks/use-toast';
 import { SliderStatus } from '@/components/SliderStatus';
 
@@ -32,6 +32,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const sliderState = useSliderStore(s => s.sliderState);
   const isConnected = useSliderStore(s => s.isConnected);
   const isCalibrated = sliderState.homed && sliderState.rightPoint > sliderState.leftPoint;
+  const isCalibrating = sliderState.mode === 'calibrating';
   const lastSentSettingsRef = useRef<string | null>(null);
 
   const hasAccelerationLimit = sliderState.accelerationLimit > 0;
@@ -54,7 +55,6 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
         gotoMaxVel: sliderState.gotoMaxVel,
         timelapse1TotalTimeMs: sliderState.timelapse1TotalTimeMs,
         timelapse1PingPong: sliderState.timelapse1PingPong,
-        timelapse2Vel: sliderState.timelapse2Vel,
         timelapse2DelayMs: sliderState.timelapse2DelayMs,
       }),
     [
@@ -68,7 +68,6 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
       sliderState.gotoMaxVel,
       sliderState.timelapse1TotalTimeMs,
       sliderState.timelapse1PingPong,
-      sliderState.timelapse2Vel,
       sliderState.timelapse2DelayMs,
     ],
   );
@@ -114,16 +113,16 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   };
 
   const handleCalibrate = async () => {
-    const success = await startCalibration();
+    const success = await (isCalibrating ? stop() : startCalibration());
     if (success) {
       toast({
-        title: 'Calibration started',
-        description: 'Slider entered calibrating mode',
+        title: isCalibrating ? 'Calibration stopped' : 'Calibration started',
+        description: isCalibrating ? 'Calibration flow stopped' : 'Slider entered calibrating mode',
       });
     } else {
       toast({
-        title: 'Calibration failed',
-        description: 'Could not start calibration',
+        title: isCalibrating ? 'Stop failed' : 'Calibration failed',
+        description: isCalibrating ? 'Could not stop calibration' : 'Could not start calibration',
         variant: 'destructive',
       });
     }
@@ -285,13 +284,13 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
           <div className="space-y-4 pt-2 border-t border-border">
             <h4 className="text-sm font-semibold">Encoder Calibration</h4>
             <Button
-              variant="secondary"
+              variant={isCalibrating ? 'destructive' : 'secondary'}
               onClick={handleCalibrate}
               disabled={!isConnected}
               className="w-full gap-2"
             >
               <Compass className="w-4 h-4" />
-              Start Calibration
+              {isCalibrating ? 'Stop Calibration' : 'Start Calibration'}
             </Button>
           </div>
           {!isConnected && (
