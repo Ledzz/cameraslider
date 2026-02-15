@@ -322,7 +322,7 @@ const mapRawPositionToPercent = (position: number, leftPoint: number, rightPoint
 
 const mapRawVelocityToPercent = (velocity: number, maxSpeed: number) => {
   const base = maxSpeed > 0 ? maxSpeed : DEFAULT_MAX_SPEED;
-  return clamp((Math.abs(velocity) / base) * 100, 0, 100);
+  return clamp((velocity / base) * 100, -100, 100);
 };
 
 const onSessionChange = (nextSessionId: number) => {
@@ -784,9 +784,9 @@ export const setEnabled = async (enable: boolean) => {
 };
 
 export const setVelocity = async ({ velocity }: { velocity: number }) => {
-  const clamped = clamp(velocity, 0, 100);
+  const clamped = clamp(velocity, -100, 100);
   const maxSpeed = useSliderStore.getState().sliderState.maxSpeed || DEFAULT_MAX_SPEED;
-  const vel = Math.round((clamped / 100) * maxSpeed);
+  const vel = Math.round(((-clamped) / 100) * maxSpeed);
 
   const success = await executeCommand({ cmd: "velocity", vel });
   if (success) {
@@ -795,6 +795,18 @@ export const setVelocity = async ({ velocity }: { velocity: number }) => {
     }));
   }
   return success;
+};
+
+export const resetVelocityTarget = () => {
+  useSliderStore.setState((state) => ({
+    velocityMode: { ...state.velocityMode, speed: 0 },
+    sliderState: {
+      ...state.sliderState,
+      velocity: 0,
+      velocityCmd: 0,
+      isMoving: false,
+    },
+  }));
 };
 
 export const stop = async () => executeCommand({ cmd: "stop" });
