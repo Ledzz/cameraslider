@@ -17,6 +17,7 @@ export function PositionMode() {
     typeof targetPercentUi === "number"
       ? Math.max(0, Math.min(100, targetPercentUi))
       : Math.max(0, Math.min(100, sliderState.position));
+  const showTargetValue = sliderState.mode === "goto" && sliderState.isMoving;
 
   const onGoTo = async (percent: number) => {
     const success = await goToPercent(percent, sliderState.gotoMaxVel);
@@ -53,7 +54,9 @@ export function PositionMode() {
           <div className="space-y-3">
             <div className="flex justify-between">
               <Label className="text-xs text-muted-foreground">Target Position</Label>
-              <span className="text-sm font-mono text-primary">{targetPercent.toFixed(1)}%</span>
+              <span className="text-sm font-mono text-primary">
+                {showTargetValue ? `${targetPercent.toFixed(1)}%` : "--"}
+              </span>
             </div>
             <Slider
               value={[targetPercent]}

@@ -60,7 +60,7 @@ Response `reason` will be `pong`.
 Request:
 
 ```json
-{ "cmd": "mode", "mode": "idle|velocity|goto|timelapse1|timelapse2|move1|calibrating" }
+{ "cmd": "mode", "mode": "idle|velocity|goto|timelapse1|timelapse2|calibrating" }
 ```
 
 #### `goto`
@@ -75,11 +75,17 @@ Request:
 #### `timelapse1`
 
 ```json
-{ "cmd": "mode", "mode": "timelapse1", "start": 0, "end": 50000, "vel": 6000 }
+{ "cmd": "mode", "mode": "timelapse1", "start": 0, "end": 50000, "totalTimeMs": 120000, "pingpong": true }
 ```
 
-- `start`, `end` required
-- `vel` optional, updates `timelapse1Vel`
+- Required: `start`, `end`, `totalTimeMs`
+- Optional: `pingpong` (`true`/`false`, default `false`)
+- Behavior:
+  1. Move to `start` (A) using max speed profile.
+  2. Compute required A->B speed from distance and `totalTimeMs`.
+     (`totalTimeMs` applies to A->B leg only, not move-to-A.)
+  3. Run constant-speed A->B motion until endpoint B is reached.
+  4. If `pingpong=true`, swap A/B and continue indefinitely until `stop`.
 
 #### `timelapse2`
 
@@ -108,14 +114,6 @@ Timelapse2 trigger behavior:
 3. Wait `delay` ms.
 4. Move exactly one planned step.
 
-#### `move1`
-
-```json
-{ "cmd": "mode", "mode": "move1", "vel": 7000 }
-```
-
-- `vel` optional; if omitted, uses current `move1Vel`.
-
 #### `calibrating`
 
 ```json
@@ -131,6 +129,9 @@ Timelapse2 trigger behavior:
 ```
 
 - Sets mode to `velocity` and applies speed.
+- Velocity mode auto-bounce behavior:
+  - If homed: reverses at calibrated endpoint bounds.
+  - If not homed: reverses on AUX1 end-switch activation edge.
 
 ### 4) Acceleration Shortcut
 
@@ -172,9 +173,9 @@ Note: legacy compatibility keys are removed. Use only the keys documented here.
   "acceleration": 180000,
   "homingSpeed": 9000,
   "gotoMaxVel": 8000,
-  "timelapse1Vel": 6000,
+  "timelapse1TotalTimeMs": 120000,
+  "timelapse1PingPong": true,
   "timelapse2Vel": 3000,
-  "move1Vel": 7000,
   "timelapse2DelayMs": 20
 }
 ```
@@ -193,6 +194,8 @@ Note: legacy compatibility keys are removed. Use only the keys documented here.
 - `acceleration`: `>= 0`
 - `homingSpeed`: `> 0`
 - `timelapse2DelayMs`: `>= 0`
+- `totalTimeMs` in `timelapse1` mode: `> 0`
+- `timelapse1PingPong`: `true|false`
 
 Runtime limits are exposed in status as:
 
@@ -279,12 +282,17 @@ Short-key schema:
   - `al` acceleration firmware limit
   - `hs` homing speed
   - `gv` goto max velocity
-  - `t1v`, `t2v`, `m1v` mode velocities
+  - `t1v`, `t2v` mode velocities
+  - `t1tm` timelapse1 total time (ms)
+  - `t1pp` timelapse1 pingpong flag
   - `sc` step count
   - `se` steps executed
   - `d2` timelapse2 trigger delay ms
 - IO:
   - `x2` AUX2 input active
+
+Note: `t1v` is computed by firmware for each timelapse1 run from
+distance and `t1tm`.
 
 ## Error Codes You Should Handle
 
@@ -296,6 +304,8 @@ Short-key schema:
 - `missing_tl1_params`
 - `missing_tl2_params`
 - `invalid_step_count`
+- `invalid_tl1_time`
+- `tl1_speed_too_high`
 - `missing_driver_enable`
 - `invalid_microsteps`
 - `invalid_pd_voltage`
@@ -308,8 +318,11 @@ Short-key schema:
 
 ## Migration (v1 -> v2 Short Keys)
 
-Command payloads are unchanged (keep verbose keys like `pdVoltage`, `timelapse1Vel`, etc.).
+Command payloads are unchanged (keep verbose keys like `pdVoltage`, `timelapse1TotalTimeMs`, etc.).
 Only outbound response/status payload keys changed to shorter names.
+
+Timelapse1 update: `mode: timelapse1` now requires `totalTimeMs`.
+Move1 update: `mode: move1` is removed; use `timelapse1` with `pingpong: true`.
 
 ### Response key mapping
 
@@ -342,8 +355,9 @@ Only outbound response/status payload keys changed to shorter names.
 - `homingSpeed` -> `hs`
 - `gotoMaxVel` -> `gv`
 - `timelapse1Vel` -> `t1v`
+- `timelapse1TotalTimeMs` -> `t1tm`
+- `timelapse1PingPong` -> `t1pp`
 - `timelapse2Vel` -> `t2v`
-- `move1Vel` -> `m1v`
 - `stepCount` -> `sc`
 - `stepsExecuted` -> `se`
 - `timelapse2DelayMs` -> `d2`

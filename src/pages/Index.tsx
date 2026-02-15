@@ -4,7 +4,6 @@ import { Header } from '@/components/Header';
 import { PositionMode } from '@/components/modes/PositionMode';
 import { Timelapse1Mode } from '@/components/modes/Timelapse1Mode';
 import { Timelapse2Mode } from '@/components/modes/Timelapse2Mode';
-import { Move1Mode } from '@/components/modes/Move1Mode';
 import { VelocityMode } from '@/components/modes/VelocityMode';
 import { SettingsDialog } from '@/components/settings/SettingsDialog';
 import {useSliderStore, ActiveMode, autoConnect, setActiveMode} from '@/store/sliderStore';
@@ -32,7 +31,7 @@ const Index = () => {
         )}
 
         <Tabs value={activeMode} onValueChange={(v) => setActiveMode(v as ActiveMode)}>
-          <TabsList className="grid w-full grid-cols-5 bg-secondary mb-4">
+          <TabsList className="grid w-full grid-cols-4 bg-secondary mb-4">
             <TabsTrigger value="goto" className="flex-1 text-xs">
               Goto
             </TabsTrigger>
@@ -41,9 +40,6 @@ const Index = () => {
             </TabsTrigger>
             <TabsTrigger value="timelapse2" className="flex-1 text-xs">
               TL2
-            </TabsTrigger>
-            <TabsTrigger value="move1" className="flex-1 text-xs">
-              Move1
             </TabsTrigger>
             <TabsTrigger value="velocity" className="flex-1 text-xs">
               Velocity
@@ -60,10 +56,6 @@ const Index = () => {
 
           <TabsContent value="timelapse2" className="mt-0">
             <Timelapse2Mode />
-          </TabsContent>
-
-          <TabsContent value="move1" className="mt-0">
-            <Move1Mode />
           </TabsContent>
 
           <TabsContent value="velocity" className="mt-0">

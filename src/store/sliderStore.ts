@@ -19,7 +19,7 @@ export enum StandstillMode {
 
 export type PlayMode = "ping-pong" | "loop";
 export type TriggerMode = "button" | "timeout";
-export type ActiveMode = "goto" | "timelapse1" | "timelapse2" | "move1" | "velocity";
+export type ActiveMode = "goto" | "timelapse1" | "timelapse2" | "velocity";
 
 export interface DriverStatus {
   over_temperature_warning: boolean;
@@ -74,9 +74,10 @@ export interface SliderState {
   accelerationLimit: number;
   homingSpeed: number;
   gotoMaxVel: number;
+  timelapse1TotalTimeMs: number;
+  timelapse1PingPong: boolean;
   timelapse1Vel: number;
   timelapse2Vel: number;
-  move1Vel: number;
   timelapse2DelayMs: number;
 }
 
@@ -87,6 +88,7 @@ interface VelocityModeState {
 interface SliderStore {
   activeMode: ActiveMode;
   targetPercentUi: number | null;
+  tl1Ui: { startPercent: number; endPercent: number } | null;
   isConnected: boolean;
   isConnecting: boolean;
   error: string;
@@ -172,9 +174,10 @@ const DEFAULT_SLIDER_STATE: SliderState = {
   accelerationLimit: 180000,
   homingSpeed: 9000,
   gotoMaxVel: 8000,
+  timelapse1TotalTimeMs: 120000,
+  timelapse1PingPong: false,
   timelapse1Vel: 6000,
   timelapse2Vel: 3000,
-  move1Vel: 7000,
   timelapse2DelayMs: 20,
 };
 
@@ -500,14 +503,19 @@ const applyStatusUpdate = (payload: Record<string, unknown>) => {
       next.timelapse1Vel = timelapse1Vel;
     }
 
+    const timelapse1TotalTimeMs = pickNumber(payload, ["t1tm", "timelapse1TotalTimeMs"]);
+    if (timelapse1TotalTimeMs !== null && timelapse1TotalTimeMs > 0) {
+      next.timelapse1TotalTimeMs = timelapse1TotalTimeMs;
+    }
+
+    const timelapse1PingPong = pickBoolean(payload, ["t1pp", "timelapse1PingPong"]);
+    if (timelapse1PingPong !== null) {
+      next.timelapse1PingPong = timelapse1PingPong;
+    }
+
     const timelapse2Vel = pickNumber(payload, ["t2v", "timelapse2Vel"]);
     if (timelapse2Vel !== null && timelapse2Vel > 0) {
       next.timelapse2Vel = timelapse2Vel;
-    }
-
-    const move1Vel = pickNumber(payload, ["m1v", "move1Vel"]);
-    if (move1Vel !== null && move1Vel > 0) {
-      next.move1Vel = move1Vel;
     }
 
     const timelapse2DelayMs = pickNumber(payload, ["d2", "timelapse2DelayMs"]);
@@ -741,6 +749,19 @@ export const setTargetPercentUi = (targetPercentUi: number | null) => {
   useSliderStore.setState({ targetPercentUi });
 };
 
+export const setTl1Ui = (startPercent: number, endPercent: number) => {
+  useSliderStore.setState({
+    tl1Ui: {
+      startPercent: clamp(startPercent, 0, 100),
+      endPercent: clamp(endPercent, 0, 100),
+    },
+  });
+};
+
+export const clearTl1Ui = () => {
+  useSliderStore.setState({ tl1Ui: null });
+};
+
 export const updateSettings = (partialSetting: Partial<SliderState>) => {
   useSliderStore.setState((state) => ({
     sliderState: {
@@ -763,9 +784,9 @@ export const saveSettingsToDevice = async () => {
     acceleration: s.acceleration,
     homingSpeed: s.homingSpeed,
     gotoMaxVel: s.gotoMaxVel,
-    timelapse1Vel: s.timelapse1Vel,
+    timelapse1TotalTimeMs: s.timelapse1TotalTimeMs,
+    timelapse1PingPong: s.timelapse1PingPong,
     timelapse2Vel: s.timelapse2Vel,
-    move1Vel: s.move1Vel,
     timelapse2DelayMs: s.timelapse2DelayMs,
   });
 };
@@ -872,7 +893,8 @@ export const goToPercent = async (percent: number, maxVel?: number) => {
 export const startTimelapse1 = async (params: {
   startPercent: number;
   endPercent: number;
-  vel?: number;
+  totalTimeMs: number;
+  pingpong?: boolean;
 }) => {
   const start = percentToRawTarget(params.startPercent);
   const end = percentToRawTarget(params.endPercent);
@@ -880,15 +902,18 @@ export const startTimelapse1 = async (params: {
     return false;
   }
 
+  const totalTimeMs = Math.max(1, Math.round(params.totalTimeMs));
+
   const payload: CommandPayload = {
     cmd: "mode",
     mode: "timelapse1",
     start,
     end,
+    totalTimeMs,
   };
 
-  if (typeof params.vel === "number" && params.vel > 0) {
-    payload.vel = Math.round(params.vel);
+  if (typeof params.pingpong === "boolean") {
+    payload.pingpong = params.pingpong;
   }
 
   return executeCommand(payload);
@@ -929,24 +954,12 @@ export const startTimelapse2 = async (params: {
   return executeCommand(payload);
 };
 
-export const startMove1 = async (params?: { vel?: number }) => {
-  const payload: CommandPayload = {
-    cmd: "mode",
-    mode: "move1",
-  };
-
-  if (typeof params?.vel === "number" && params.vel > 0) {
-    payload.vel = Math.round(params.vel);
-  }
-
-  return executeCommand(payload);
-};
-
 export const useSliderStore = create<SliderStore>()(
   persist(
     () => ({
       activeMode: "goto",
       targetPercentUi: null,
+      tl1Ui: null,
       isConnected: false,
       isConnecting: false,
       error: "",

@@ -52,8 +52,10 @@ function DriverStatusDisplay({ status }: { status: DriverStatus }) {
 }
 
 export function SliderStatus() {
+  const activeMode = useSliderStore(s => s.activeMode);
   const sliderState = useSliderStore(s => s.sliderState);
   const targetPercentUi = useSliderStore(s => s.targetPercentUi);
+  const tl1Ui = useSliderStore(s => s.tl1Ui);
 
   const targetPercent = (() => {
     if (typeof targetPercentUi === 'number') {
@@ -68,6 +70,11 @@ export function SliderStatus() {
 
     return Math.max(0, Math.min(100, sliderState.position));
   })();
+
+  const showGotoFill = activeMode === 'goto' && sliderState.mode === 'goto' && sliderState.isMoving;
+  const showTl1Markers = activeMode === 'timelapse1' && !!tl1Ui;
+  const tl1Start = tl1Ui ? Math.max(0, Math.min(100, tl1Ui.startPercent)) : 0;
+  const tl1End = tl1Ui ? Math.max(0, Math.min(100, tl1Ui.endPercent)) : 0;
 
   return (
     <Card className="bg-card/80 backdrop-blur border-border">
@@ -143,24 +150,55 @@ export function SliderStatus() {
           </div>
 
           <div className="col-span-2 border-t border-border pt-3 mt-1 space-y-2">
-            <div className="flex justify-between">
-              <div className="text-xs text-muted-foreground">Target Position</div>
-              <span className="text-sm font-mono text-primary">{targetPercent.toFixed(1)}%</span>
-            </div>
-
             <div className="relative h-8 rounded-md bg-secondary overflow-hidden">
-              <div
-                className="absolute inset-y-0 left-0 bg-primary/20"
-                style={{ width: `${targetPercent}%` }}
-              />
+              {showTl1Markers && (
+                <>
+                  <div
+                    className="absolute inset-y-0 bg-primary/10"
+                    style={{
+                      left: `${Math.min(tl1Start, tl1End)}%`,
+                      width: `${Math.abs(tl1End - tl1Start)}%`,
+                    }}
+                  />
+                  <div
+                    className="absolute top-0 bottom-0 w-0.5 bg-point-a"
+                    style={{ left: `${tl1Start}%` }}
+                  />
+                  <div
+                    className="absolute top-0 bottom-0 w-0.5 bg-point-b"
+                    style={{ left: `${tl1End}%` }}
+                  />
+                  <div
+                    className="absolute top-0 -translate-x-1/2 text-[10px] font-bold text-point-a"
+                    style={{ left: `${tl1Start}%` }}
+                  >
+                    A
+                  </div>
+                  <div
+                    className="absolute top-0 -translate-x-1/2 text-[10px] font-bold text-point-b"
+                    style={{ left: `${tl1End}%` }}
+                  >
+                    B
+                  </div>
+                </>
+              )}
+
+              {showGotoFill && (
+                <div
+                  className="absolute inset-y-0 left-0 bg-primary/20"
+                  style={{ width: `${targetPercent}%` }}
+                />
+              )}
               <div
                 className="absolute top-1 bottom-1 w-4 rounded-sm bg-accent transition-all duration-100"
                 style={{ left: `${Math.max(0, Math.min(100, sliderState.position))}%`, transform: 'translateX(-50%)' }}
               />
-              <div
-                className="absolute top-0 bottom-0 w-0.5 bg-primary"
-                style={{ left: `${targetPercent}%` }}
-              />
+              {showGotoFill && (
+                <div
+                  className="absolute top-0 bottom-0 w-0.5 bg-primary"
+                  style={{ left: `${targetPercent}%` }}
+                />
+              )}
             </div>
           </div>
         </div>

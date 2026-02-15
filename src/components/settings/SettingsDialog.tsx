@@ -52,9 +52,9 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
         acceleration: sliderState.acceleration,
         homingSpeed: sliderState.homingSpeed,
         gotoMaxVel: sliderState.gotoMaxVel,
-        timelapse1Vel: sliderState.timelapse1Vel,
+        timelapse1TotalTimeMs: sliderState.timelapse1TotalTimeMs,
+        timelapse1PingPong: sliderState.timelapse1PingPong,
         timelapse2Vel: sliderState.timelapse2Vel,
-        move1Vel: sliderState.move1Vel,
         timelapse2DelayMs: sliderState.timelapse2DelayMs,
       }),
     [
@@ -66,9 +66,9 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
       sliderState.acceleration,
       sliderState.homingSpeed,
       sliderState.gotoMaxVel,
-      sliderState.timelapse1Vel,
+      sliderState.timelapse1TotalTimeMs,
+      sliderState.timelapse1PingPong,
       sliderState.timelapse2Vel,
-      sliderState.move1Vel,
       sliderState.timelapse2DelayMs,
     ],
   );
