@@ -9,6 +9,7 @@ const RESPONSE_CHARACTERISTIC_UUID = "12345678-1234-5678-1234-56789abcdef3";
 const DEFAULT_MAX_SPEED = 25000;
 const COMMAND_TIMEOUT_MS = 2000;
 const CONNECT_PING_TIMEOUT_MS = 3000;
+const RECONNECT_DELAYS_MS = [1000, 2000, 4000, 8000, 10000];
 
 export enum StandstillMode {
   NORMAL = 0,
@@ -190,8 +191,13 @@ let responseCharRef: BluetoothRemoteGATTCharacteristic | null = null;
 let statusListener: ((event: Event) => void) | null = null;
 let responseListener: ((event: Event) => void) | null = null;
 let disconnectListener: (() => void) | null = null;
+let availabilityListenerAttached = false;
 let requestCounter = 0;
 let currentSessionId: number | null = null;
+let reconnectTimeoutId: ReturnType<typeof setTimeout> | null = null;
+let reconnectAttempts = 0;
+let reconnectInProgress = false;
+let intentionalDisconnect = false;
 
 const pendingCommands = new Map<string, PendingCommand>();
 
@@ -209,6 +215,63 @@ const clearPendingCommands = (reason: string) => {
     pending.reject(new Error(reason));
   }
   pendingCommands.clear();
+};
+
+const cancelReconnectTimer = () => {
+  if (reconnectTimeoutId) {
+    clearTimeout(reconnectTimeoutId);
+    reconnectTimeoutId = null;
+  }
+};
+
+const ensureAvailabilityListener = () => {
+  if (!navigator.bluetooth || availabilityListenerAttached) {
+    return;
+  }
+
+  const bluetooth = navigator.bluetooth as Bluetooth & {
+    addEventListener?: (type: string, listener: (event: Event) => void) => void;
+  };
+
+  if (!bluetooth.addEventListener) {
+    return;
+  }
+
+  bluetooth.addEventListener("availabilitychanged", (event: Event) => {
+    const value = (event as unknown as { value?: boolean }).value;
+    if (!intentionalDisconnect && value === true) {
+      cancelReconnectTimer();
+      void autoConnect();
+    }
+  });
+
+  availabilityListenerAttached = true;
+};
+
+const scheduleReconnect = () => {
+  if (intentionalDisconnect || reconnectTimeoutId || reconnectInProgress) {
+    return;
+  }
+
+  if (useSliderStore.getState().isConnected) {
+    return;
+  }
+
+  const delay = RECONNECT_DELAYS_MS[Math.min(reconnectAttempts, RECONNECT_DELAYS_MS.length - 1)];
+  reconnectAttempts += 1;
+  const attemptNumber = reconnectAttempts;
+
+  useSliderStore.setState({ error: `Reconnecting... (attempt ${attemptNumber})` });
+
+  reconnectTimeoutId = setTimeout(async () => {
+    reconnectTimeoutId = null;
+    reconnectInProgress = true;
+    try {
+      await autoConnect();
+    } finally {
+      reconnectInProgress = false;
+    }
+  }, delay);
 };
 
 const resolveSinglePendingCommand = (response: AckResponse) => {
@@ -638,7 +701,7 @@ const cleanupConnection = (message?: string) => {
   });
 };
 
-const connectToDevice = async (device: BluetoothDevice) => {
+const connectToDevice = async (device: BluetoothDevice): Promise<boolean> => {
   useSliderStore.setState({ isConnecting: true, error: "" });
 
   try {
@@ -672,10 +735,16 @@ const connectToDevice = async (device: BluetoothDevice) => {
     }
     disconnectListener = () => {
       cleanupConnection("Device disconnected");
+      if (!intentionalDisconnect) {
+        scheduleReconnect();
+      }
     };
     device.addEventListener("gattserverdisconnected", disconnectListener);
 
     deviceRef = device;
+    intentionalDisconnect = false;
+    cancelReconnectTimer();
+    reconnectAttempts = 0;
 
     const pingOk = await executeCommand({ cmd: "ping" }, CONNECT_PING_TIMEOUT_MS);
     useSliderStore.setState({
@@ -683,9 +752,31 @@ const connectToDevice = async (device: BluetoothDevice) => {
       isConnected: true,
       error: pingOk ? "" : "Ping failed after connect, continuing with status sync",
     });
+    return true;
   } catch (error) {
     cleanupConnection(toUserError(error, "Failed to connect"));
+    return false;
   }
+};
+
+const tryConnectKnownDevices = async () => {
+  const bluetooth = navigator.bluetooth as Bluetooth & {
+    getDevices?: () => Promise<BluetoothDevice[]>;
+  };
+
+  if (!bluetooth.getDevices) {
+    return false;
+  }
+
+  const devices = await bluetooth.getDevices();
+  for (const device of devices) {
+    const connected = await connectToDevice(device);
+    if (connected && useSliderStore.getState().isConnected) {
+      return true;
+    }
+  }
+
+  return false;
 };
 
 export const autoConnect = async () => {
@@ -694,24 +785,20 @@ export const autoConnect = async () => {
     return;
   }
 
+  intentionalDisconnect = false;
+  ensureAvailabilityListener();
+
   try {
-    const bluetooth = navigator.bluetooth as Bluetooth & {
-      getDevices?: () => Promise<BluetoothDevice[]>;
-    };
-
-    if (!bluetooth.getDevices) {
-      return;
-    }
-
-    const devices = await bluetooth.getDevices();
-    for (const device of devices) {
-      await connectToDevice(device);
-      if (useSliderStore.getState().isConnected) {
-        return;
+    const connected = await tryConnectKnownDevices();
+    if (!connected && !intentionalDisconnect) {
+      scheduleReconnect();
+      if (!useSliderStore.getState().isConnecting) {
+        useSliderStore.setState({ error: "Waiting for known BLE device..." });
       }
     }
   } catch (error) {
     useSliderStore.setState({ error: toUserError(error, "Auto connect failed") });
+    scheduleReconnect();
   }
 };
 
@@ -720,6 +807,10 @@ export const manualConnect = async () => {
     useSliderStore.setState({ error: "Web Bluetooth not supported in this browser" });
     return;
   }
+
+  intentionalDisconnect = false;
+  cancelReconnectTimer();
+  ensureAvailabilityListener();
 
   try {
     const device = await navigator.bluetooth.requestDevice({
@@ -734,6 +825,9 @@ export const manualConnect = async () => {
 };
 
 export const disconnect = () => {
+  intentionalDisconnect = true;
+  cancelReconnectTimer();
+
   if (deviceRef?.gatt?.connected) {
     deviceRef.gatt.disconnect();
   }
