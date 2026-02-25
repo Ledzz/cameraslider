@@ -1,5 +1,5 @@
 import { Gauge, Play, Square } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -21,6 +21,7 @@ export function VelocityMode() {
   const sliderState = useSliderStore((s) => s.sliderState);
   const activeMode = useSliderStore((s) => s.activeMode);
   const isConnected = useSliderStore((s) => s.isConnected);
+  const lastDraggedVelocityRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (activeMode !== "velocity") {
@@ -34,6 +35,27 @@ export function VelocityMode() {
   }, [activeMode, isConnected]);
 
   const isRunning = sliderState.mode === "velocity" && sliderState.isMoving;
+
+  useEffect(() => {
+    if (!isRunning) {
+      lastDraggedVelocityRef.current = null;
+    }
+  }, [isRunning]);
+
+  const handleVelocityDrag = ([value]: number[]) => {
+    setVelocityTarget(value);
+
+    if (!isConnected || !isRunning) {
+      return;
+    }
+
+    if (lastDraggedVelocityRef.current === value) {
+      return;
+    }
+
+    lastDraggedVelocityRef.current = value;
+    void setVelocity({ velocity: value });
+  };
 
   const handleStart = async () => {
     await setEnabled(true);
@@ -76,7 +98,7 @@ export function VelocityMode() {
             </div>
             <Slider
               value={[velocityMode.speed]}
-              onValueChange={([v]) => setVelocityTarget(v)}
+              onValueChange={handleVelocityDrag}
               min={-100}
               max={100}
               step={1}
