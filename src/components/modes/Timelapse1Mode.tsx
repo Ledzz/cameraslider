@@ -7,8 +7,11 @@ import { Slider } from "@/components/ui/slider";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { SliderStatus } from "@/components/SliderStatus";
+import { GimbalControls } from "@/components/modes/GimbalControls";
+import { TimelapseGimbalEditor } from "@/components/modes/TimelapseGimbalEditor";
 import {
   clearTl1Ui,
+  setTl1GimbalPose,
   setTl1Ui,
   startTimelapse1,
   stop,
@@ -29,6 +32,7 @@ export function Timelapse1Mode() {
   const { toast } = useToast();
   const isConnected = useSliderStore((s) => s.isConnected);
   const sliderState = useSliderStore((s) => s.sliderState);
+  const tl1GimbalUi = useSliderStore((s) => s.tl1GimbalUi);
   const isCalibrated = sliderState.homed && sliderState.rightPoint > sliderState.leftPoint;
 
   const [startPercent, setStartPercent] = useState(0);
@@ -175,6 +179,8 @@ export function Timelapse1Mode() {
       endPercent,
       totalTimeMs: safeSeconds * 1000,
       pingpong: pingPong,
+      gimbalA: tl1GimbalUi.a,
+      gimbalB: tl1GimbalUi.b,
     });
 
     if (success) {
@@ -303,6 +309,16 @@ export function Timelapse1Mode() {
           )}
         </CardContent>
       </Card>
+
+      {isConnected && <GimbalControls showLiveControlSections={false} />}
+      {isConnected && (
+        <TimelapseGimbalEditor
+          title="Timelapse Gimbal Endpoints"
+          description="Set gimbal A/B poses, including focus, for interpolation during the TL1 move."
+          poses={tl1GimbalUi}
+          onChange={setTl1GimbalPose}
+        />
+      )}
     </div>
   );
 }

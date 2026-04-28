@@ -22,6 +22,18 @@ export type PlayMode = "ping-pong" | "loop";
 export type TriggerMode = "button" | "timeout";
 export type ActiveMode = "goto" | "timelapse1" | "timelapse2" | "velocity";
 
+export interface GimbalPose {
+  yaw: number;
+  roll: number;
+  pitch: number;
+  focus: number;
+}
+
+export interface TimelapseGimbalUiState {
+  a: GimbalPose;
+  b: GimbalPose;
+}
+
 export interface DriverStatus {
   over_temperature_warning: boolean;
   over_temperature_shutdown: boolean;
@@ -86,15 +98,34 @@ interface VelocityModeState {
   speed: number;
 }
 
+export interface GimbalState {
+  connected: boolean;
+  connecting: boolean;
+  sleeping: boolean;
+  batteryKnown: boolean;
+  batteryLevel: number;
+  orientationKnown: boolean;
+  yaw: number;
+  roll: number;
+  pitch: number;
+  focusInitialized: boolean;
+  focusEstimate: number;
+  hasError: boolean;
+  error: string;
+}
+
 interface SliderStore {
   activeMode: ActiveMode;
   targetPercentUi: number | null;
   tl1Ui: { startPercent: number; endPercent: number } | null;
   tl2Ui: { startPercent: number; endPercent: number } | null;
+  tl1GimbalUi: TimelapseGimbalUiState;
+  tl2GimbalUi: TimelapseGimbalUiState;
   isConnected: boolean;
   isConnecting: boolean;
   error: string;
   sliderState: SliderState;
+  gimbalState: GimbalState;
   velocityMode: VelocityModeState;
 }
 
@@ -120,7 +151,38 @@ type CommandPayload = Record<string, unknown> & { cmd: string };
 type PendingCommand = {
   resolve: (response: AckResponse) => void;
   reject: (error: Error) => void;
-  timeoutId: ReturnType<typeof setTimeout>;
+  timeoutId: ReturnType<typeof setTimeout> | null;
+};
+
+const applyResponseState = (parsed: Record<string, unknown>) => {
+  const nextGimbal = normalizeGimbalState(parsed.gm, useSliderStore.getState().gimbalState);
+  const sessionId = pickNumber(parsed, ["sid", "sessionId"]);
+  const fw = pickString(parsed, ["fw"]);
+  const mode = pickString(parsed, ["m", "mode"]);
+  const error = pickString(parsed, ["e", "error"]);
+
+  if (sessionId === null && fw === null && mode === null && error === null && !nextGimbal) {
+    return;
+  }
+
+  useSliderStore.setState((state) => {
+    const nextSliderState: SliderState = {
+      ...state.sliderState,
+      sessionId: sessionId ?? state.sliderState.sessionId,
+      fw: fw ?? state.sliderState.fw,
+      mode: mode ?? state.sliderState.mode,
+      error: error ?? state.sliderState.error,
+    };
+
+    return nextGimbal
+      ? {
+          sliderState: nextSliderState,
+          gimbalState: nextGimbal,
+        }
+      : {
+          sliderState: nextSliderState,
+        };
+  });
 };
 
 const DEFAULT_DRIVER_STATUS: DriverStatus = {
@@ -139,6 +201,18 @@ const DEFAULT_DRIVER_STATUS: DriverStatus = {
   current_scaling: 0,
   stealth_chop_mode: false,
   standstill: true,
+};
+
+const DEFAULT_GIMBAL_POSE: GimbalPose = {
+  yaw: 0,
+  roll: 0,
+  pitch: 0,
+  focus: 0,
+};
+
+const DEFAULT_TIMELAPSE_GIMBAL_UI: TimelapseGimbalUiState = {
+  a: { ...DEFAULT_GIMBAL_POSE },
+  b: { ...DEFAULT_GIMBAL_POSE },
 };
 
 const DEFAULT_SLIDER_STATE: SliderState = {
@@ -183,6 +257,22 @@ const DEFAULT_SLIDER_STATE: SliderState = {
   timelapse2DelayMs: 20,
 };
 
+const DEFAULT_GIMBAL_STATE: GimbalState = {
+  connected: false,
+  connecting: false,
+  sleeping: false,
+  batteryKnown: false,
+  batteryLevel: 0,
+  orientationKnown: false,
+  yaw: 0,
+  roll: 0,
+  pitch: 0,
+  focusInitialized: false,
+  focusEstimate: 0,
+  hasError: false,
+  error: "",
+};
+
 let deviceRef: BluetoothDevice | null = null;
 let commandCharRef: BluetoothRemoteGATTCharacteristic | null = null;
 let statusCharRef: BluetoothRemoteGATTCharacteristic | null = null;
@@ -204,6 +294,13 @@ const pendingCommands = new Map<string, PendingCommand>();
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
 
+const clampGimbalPose = (pose: GimbalPose): GimbalPose => ({
+  yaw: clamp(pose.yaw, -180, 180),
+  roll: clamp(pose.roll, -30, 30),
+  pitch: clamp(pose.pitch, -30, 30),
+  focus: clamp(Math.round(pose.focus), 0, 1000),
+});
+
 const nextRequestId = () => {
   requestCounter += 1;
   return `req-${Date.now()}-${requestCounter}`;
@@ -211,7 +308,9 @@ const nextRequestId = () => {
 
 const clearPendingCommands = (reason: string) => {
   for (const [, pending] of pendingCommands) {
-    clearTimeout(pending.timeoutId);
+    if (pending.timeoutId) {
+      clearTimeout(pending.timeoutId);
+    }
     pending.reject(new Error(reason));
   }
   pendingCommands.clear();
@@ -281,7 +380,9 @@ const resolveSinglePendingCommand = (response: AckResponse) => {
   }
 
   const [requestId, pending] = pendingEntries[0];
-  clearTimeout(pending.timeoutId);
+  if (pending.timeoutId) {
+    clearTimeout(pending.timeoutId);
+  }
   pendingCommands.delete(requestId);
   pending.resolve(response);
   return true;
@@ -381,6 +482,95 @@ const normalizeDriverStatus = (
   return changed ? next : null;
 };
 
+const normalizeGimbalState = (value: unknown, previous: GimbalState): GimbalState | null => {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const raw = value as Record<string, unknown>;
+  const next: GimbalState = { ...previous };
+  let changed = false;
+
+  const connected = pickBoolean(raw, ["c", "connected"]);
+  if (connected !== null) {
+    next.connected = connected;
+    changed = true;
+  }
+
+  const connecting = pickBoolean(raw, ["g", "connecting"]);
+  if (connecting !== null) {
+    next.connecting = connecting;
+    changed = true;
+  }
+
+  const sleeping = pickBoolean(raw, ["s", "sleeping"]);
+  if (sleeping !== null) {
+    next.sleeping = sleeping;
+    changed = true;
+  }
+
+  const focusInitialized = pickBoolean(raw, ["fk", "focusInitialized"]);
+  if (focusInitialized !== null) {
+    next.focusInitialized = focusInitialized;
+    changed = true;
+  }
+
+  const focusEstimate = pickNumber(raw, ["fp", "focusEstimate"]);
+  if (focusEstimate !== null) {
+    next.focusEstimate = clamp(Math.round(focusEstimate), 0, 1000);
+    changed = true;
+  }
+
+  const batteryLevel = pickNumber(raw, ["b", "battery", "batteryLevel"]);
+  if (batteryLevel !== null) {
+    next.batteryKnown = true;
+    next.batteryLevel = clamp(Math.round(batteryLevel), 0, 100);
+    changed = true;
+  }
+
+  const yaw = pickNumber(raw, ["y", "yaw"]);
+  const roll = pickNumber(raw, ["r", "roll"]);
+  const pitch = pickNumber(raw, ["p2", "pitch"]);
+  if (yaw !== null && roll !== null && pitch !== null) {
+    next.orientationKnown = true;
+    next.yaw = yaw;
+    next.roll = roll;
+    next.pitch = pitch;
+    changed = true;
+  }
+
+  const error = pickString(raw, ["e", "error"]);
+  if (error !== null) {
+    next.error = error;
+    next.hasError = error.length > 0;
+    changed = true;
+  }
+
+  const hasError = pickBoolean(raw, ["ek", "hasError"]);
+  if (hasError !== null) {
+    next.hasError = hasError;
+    changed = true;
+  }
+
+  if (!next.connected) {
+    if (batteryLevel === null && next.batteryKnown) {
+      next.batteryKnown = false;
+      next.batteryLevel = 0;
+      changed = true;
+    }
+
+    if ((yaw === null || roll === null || pitch === null) && next.orientationKnown) {
+      next.orientationKnown = false;
+      next.yaw = 0;
+      next.roll = 0;
+      next.pitch = 0;
+      changed = true;
+    }
+  }
+
+  return changed ? next : null;
+};
+
 const mapRawPositionToPercent = (position: number, leftPoint: number, rightPoint: number) => {
   const range = rightPoint - leftPoint;
   if (!Number.isFinite(range) || range === 0) return 0;
@@ -407,10 +597,12 @@ const onSessionChange = (nextSessionId: number) => {
 const handleResponseNotification = (event: Event) => {
   const target = event.target as unknown as BluetoothRemoteGATTCharacteristic | null;
   const value = target?.value;
-  if (!value) return;
+  if (!value || value.byteLength === 0) return;
 
   try {
-    const data = new TextDecoder().decode(value.buffer);
+    const data = new TextDecoder().decode(
+      new Uint8Array(value.buffer, value.byteOffset, value.byteLength),
+    );
     const parsed = JSON.parse(data) as Record<string, unknown>;
     const response: AckResponse = {
       ok: pickBoolean(parsed, ["ok"]) ?? undefined,
@@ -427,19 +619,11 @@ const handleResponseNotification = (event: Event) => {
       onSessionChange(response.sessionId);
     }
 
-    if (typeof response.sessionId === "number" || response.fw || response.mode || response.error) {
-      useSliderStore.setState((state) => ({
-        sliderState: {
-          ...state.sliderState,
-          sessionId:
-            typeof response.sessionId === "number"
-              ? response.sessionId
-              : state.sliderState.sessionId,
-          fw: typeof response.fw === "string" ? response.fw : state.sliderState.fw,
-          mode: typeof response.mode === "string" ? response.mode : state.sliderState.mode,
-          error: typeof response.error === "string" ? response.error : state.sliderState.error,
-        },
-      }));
+    applyResponseState(parsed);
+
+    const eventName = pickString(parsed, ["evt"]);
+    if (eventName === "gimbal") {
+      return;
     }
 
     if (!response.requestId) {
@@ -452,7 +636,9 @@ const handleResponseNotification = (event: Event) => {
       return;
     }
 
-    clearTimeout(pending.timeoutId);
+    if (pending.timeoutId) {
+      clearTimeout(pending.timeoutId);
+    }
     pendingCommands.delete(response.requestId);
     pending.resolve(response);
   } catch {
@@ -460,9 +646,10 @@ const handleResponseNotification = (event: Event) => {
   }
 };
 
-const applyStatusUpdate = (payload: Record<string, unknown>) => {
+export const applyStatusUpdate = (payload: Record<string, unknown>) => {
   useSliderStore.setState((state) => {
     const next: SliderState = { ...state.sliderState };
+    const nextGimbal = normalizeGimbalState(payload.gm, state.gimbalState);
 
     const sessionId = pickNumber(payload, ["sid", "sessionId"]);
     if (sessionId !== null) {
@@ -607,19 +794,26 @@ const applyStatusUpdate = (payload: Record<string, unknown>) => {
       next.isMoving = payload.isMoving;
     }
 
-    return {
-      sliderState: next,
-    };
+    return nextGimbal
+      ? {
+          sliderState: next,
+          gimbalState: nextGimbal,
+        }
+      : {
+          sliderState: next,
+        };
   });
 };
 
 const handleStatusNotification = (event: Event) => {
   const target = event.target as unknown as BluetoothRemoteGATTCharacteristic | null;
   const value = target?.value;
-  if (!value) return;
+  if (!value || value.byteLength === 0) return;
 
   try {
-    const data = new TextDecoder().decode(value.buffer);
+    const data = new TextDecoder().decode(
+      new Uint8Array(value.buffer, value.byteOffset, value.byteLength),
+    );
     const parsed = JSON.parse(data) as Record<string, unknown>;
     applyStatusUpdate(parsed);
   } catch {
@@ -645,17 +839,30 @@ const executeCommand = async (
   const payload = { ...command, requestId };
 
   try {
-    const responsePromise = new Promise<AckResponse>((resolve, reject) => {
-      const timeoutId = setTimeout(() => {
-        pendingCommands.delete(requestId);
-        reject(new Error("BLE command timeout"));
-      }, timeoutMs);
+    let resolvePending: ((response: AckResponse) => void) | null = null;
+    let rejectPending: ((error: Error) => void) | null = null;
 
-      pendingCommands.set(requestId, { resolve, reject, timeoutId });
+    const responsePromise = new Promise<AckResponse>((resolve, reject) => {
+      resolvePending = resolve;
+      rejectPending = reject;
+    });
+
+    pendingCommands.set(requestId, {
+      resolve: (response) => resolvePending?.(response),
+      reject: (error) => rejectPending?.(error),
+      timeoutId: null,
     });
 
     const encoded = new TextEncoder().encode(JSON.stringify(payload));
     await commandCharRef.writeValue(encoded);
+
+    const pending = pendingCommands.get(requestId);
+    if (pending) {
+      pending.timeoutId = setTimeout(() => {
+        pendingCommands.delete(requestId);
+        pending.reject(new Error("BLE command timeout"));
+      }, timeoutMs);
+    }
 
     const ack = await responsePromise;
     if (!ack.ok) {
@@ -667,6 +874,14 @@ const executeCommand = async (
     useSliderStore.setState({ error: "" });
     return true;
   } catch (error) {
+    const pending = pendingCommands.get(requestId);
+    if (pending) {
+      if (pending.timeoutId) {
+        clearTimeout(pending.timeoutId);
+      }
+      pendingCommands.delete(requestId);
+    }
+
     const message = toUserError(error, "Failed to send command");
     useSliderStore.setState({ error: message });
     return false;
@@ -698,6 +913,7 @@ const cleanupConnection = (message?: string) => {
     isConnected: false,
     isConnecting: false,
     error: message || "",
+    gimbalState: { ...DEFAULT_GIMBAL_STATE },
   });
 };
 
@@ -840,6 +1056,11 @@ export const setActiveMode = (activeMode: ActiveMode) => {
   useSliderStore.setState({ activeMode });
 };
 
+const sanitizeActiveMode = (value: unknown): ActiveMode =>
+  value === "goto" || value === "timelapse1" || value === "timelapse2" || value === "velocity"
+    ? value
+    : "goto";
+
 export const setTargetPercentUi = (targetPercentUi: number | null) => {
   useSliderStore.setState({ targetPercentUi });
 };
@@ -868,6 +1089,36 @@ export const setTl2Ui = (startPercent: number, endPercent: number) => {
 
 export const clearTl2Ui = () => {
   useSliderStore.setState({ tl2Ui: null });
+};
+
+export const setTl1GimbalPose = (endpoint: "a" | "b", pose: GimbalPose) => {
+  const nextPose = clampGimbalPose(pose);
+  useSliderStore.setState((state) => ({
+    tl1GimbalUi: {
+      ...state.tl1GimbalUi,
+      [endpoint]: nextPose,
+    },
+  }));
+};
+
+export const setTl2GimbalPose = (endpoint: "a" | "b", pose: GimbalPose) => {
+  const nextPose = clampGimbalPose(pose);
+  useSliderStore.setState((state) => ({
+    tl2GimbalUi: {
+      ...state.tl2GimbalUi,
+      [endpoint]: nextPose,
+    },
+  }));
+};
+
+export const captureCurrentGimbalPose = (): GimbalPose => {
+  const state = useSliderStore.getState().gimbalState;
+  return clampGimbalPose({
+    yaw: state.orientationKnown ? state.yaw : 0,
+    roll: state.orientationKnown ? state.roll : 0,
+    pitch: state.orientationKnown ? state.pitch : 0,
+    focus: state.focusEstimate,
+  });
 };
 
 export const updateSettings = (partialSetting: Partial<SliderState>) => {
@@ -946,6 +1197,106 @@ export const resetVelocityTarget = () => {
 
 export const stop = async () => executeCommand({ cmd: "stop" });
 
+const executeGimbalCommand = async (
+  action: string,
+  payload: Record<string, unknown> = {},
+  timeoutMs?: number,
+) => executeCommand({ cmd: "gimbal", action, ...payload }, timeoutMs);
+
+export const gimbalConnect = async () => {
+  const success = await executeGimbalCommand("connect");
+  if (success) {
+    useSliderStore.setState((state) => ({
+      gimbalState: {
+        ...state.gimbalState,
+        connecting: true,
+        hasError: false,
+        error: "",
+      },
+    }));
+  }
+  return success;
+};
+
+export const gimbalDisconnect = async () => {
+  const success = await executeGimbalCommand("disconnect");
+  if (success) {
+    useSliderStore.setState((state) => ({
+      gimbalState: {
+        ...state.gimbalState,
+        connected: false,
+        connecting: false,
+        sleeping: false,
+      },
+    }));
+  }
+  return success;
+};
+
+export const gimbalRecenter = async () => executeGimbalCommand("recenter");
+
+export const gimbalSleep = async () => {
+  const success = await executeGimbalCommand("sleep");
+  if (success) {
+    useSliderStore.setState((state) => ({
+      gimbalState: {
+        ...state.gimbalState,
+        sleeping: true,
+      },
+    }));
+  }
+  return success;
+};
+
+export const gimbalWake = async () => {
+  const success = await executeGimbalCommand("wake");
+  if (success) {
+    useSliderStore.setState((state) => ({
+      gimbalState: {
+        ...state.gimbalState,
+        sleeping: false,
+      },
+    }));
+  }
+  return success;
+};
+
+export const gimbalShutter = async () => executeGimbalCommand("shutter");
+
+export const gimbalSetAngle = async (params: { yaw: number; roll: number; pitch: number }) =>
+  executeGimbalCommand("angle", {
+    yaw: params.yaw,
+    roll: params.roll,
+    pitch: params.pitch,
+  });
+
+export const gimbalSetFocusTarget = async (target: number) => {
+  const safeTarget = clamp(Math.round(target), 0, 1000);
+  const success = await executeGimbalCommand("focus", { target: safeTarget });
+  if (success) {
+    useSliderStore.setState((state) => ({
+      gimbalState: {
+        ...state.gimbalState,
+        focusEstimate: safeTarget,
+      },
+    }));
+  }
+  return success;
+};
+
+export const gimbalFocusZero = async () => {
+  const success = await executeGimbalCommand("focusZero");
+  if (success) {
+    useSliderStore.setState((state) => ({
+      gimbalState: {
+        ...state.gimbalState,
+        focusEstimate: 0,
+      },
+    }));
+  }
+  return success;
+};
+
 export const setModeIdle = async () => executeCommand({ cmd: "mode", mode: "idle" });
 
 export const setModeFree = async () => executeCommand({ cmd: "mode", mode: "free" });
@@ -1009,6 +1360,8 @@ export const startTimelapse1 = async (params: {
   endPercent: number;
   totalTimeMs: number;
   pingpong?: boolean;
+  gimbalA?: GimbalPose;
+  gimbalB?: GimbalPose;
 }) => {
   const start = percentToRawTarget(params.startPercent);
   const end = percentToRawTarget(params.endPercent);
@@ -1030,6 +1383,11 @@ export const startTimelapse1 = async (params: {
     payload.pingpong = params.pingpong;
   }
 
+  if (params.gimbalA && params.gimbalB) {
+    payload.gimbalA = clampGimbalPose(params.gimbalA);
+    payload.gimbalB = clampGimbalPose(params.gimbalB);
+  }
+
   return executeCommand(payload);
 };
 
@@ -1038,6 +1396,8 @@ export const startTimelapse2 = async (params: {
   endPercent: number;
   stepCount: number;
   delay?: number;
+  gimbalA?: GimbalPose;
+  gimbalB?: GimbalPose;
 }) => {
   const start = percentToRawTarget(params.startPercent);
   const end = percentToRawTarget(params.endPercent);
@@ -1057,6 +1417,11 @@ export const startTimelapse2 = async (params: {
     delay: safeDelay,
   };
 
+  if (params.gimbalA && params.gimbalB) {
+    payload.gimbalA = clampGimbalPose(params.gimbalA);
+    payload.gimbalB = clampGimbalPose(params.gimbalB);
+  }
+
   return executeCommand(payload);
 };
 
@@ -1067,16 +1432,31 @@ export const useSliderStore = create<SliderStore>()(
       targetPercentUi: null,
       tl1Ui: null,
       tl2Ui: null,
+      tl1GimbalUi: { ...DEFAULT_TIMELAPSE_GIMBAL_UI, a: { ...DEFAULT_TIMELAPSE_GIMBAL_UI.a }, b: { ...DEFAULT_TIMELAPSE_GIMBAL_UI.b } },
+      tl2GimbalUi: { ...DEFAULT_TIMELAPSE_GIMBAL_UI, a: { ...DEFAULT_TIMELAPSE_GIMBAL_UI.a }, b: { ...DEFAULT_TIMELAPSE_GIMBAL_UI.b } },
       isConnected: false,
       isConnecting: false,
       error: "",
       sliderState: { ...DEFAULT_SLIDER_STATE },
+      gimbalState: { ...DEFAULT_GIMBAL_STATE },
       velocityMode: {
         speed: 0,
       },
     }),
     {
       name: "camera-slider-storage",
+      version: 1,
+      migrate: (persistedState) => {
+        if (!persistedState || typeof persistedState !== "object") {
+          return persistedState;
+        }
+
+        const typedState = persistedState as Record<string, unknown>;
+        return {
+          ...typedState,
+          activeMode: sanitizeActiveMode(typedState.activeMode),
+        };
+      },
       partialize: (state) => ({
         activeMode: state.activeMode,
         sliderState: state.sliderState,
@@ -1085,3 +1465,7 @@ export const useSliderStore = create<SliderStore>()(
     },
   ),
 );
+
+export const __TEST_ONLY__ = {
+  DEFAULT_GIMBAL_STATE,
+};

@@ -6,13 +6,16 @@ import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Input } from "@/components/ui/input";
 import { SliderStatus } from "@/components/SliderStatus";
-import { clearTl2Ui, setTl2Ui, startTimelapse2, stop, useSliderStore } from "@/store/sliderStore";
+import { GimbalControls } from "@/components/modes/GimbalControls";
+import { TimelapseGimbalEditor } from "@/components/modes/TimelapseGimbalEditor";
+import { clearTl2Ui, setTl2GimbalPose, setTl2Ui, startTimelapse2, stop, useSliderStore } from "@/store/sliderStore";
 import { useToast } from "@/hooks/use-toast";
 
 export function Timelapse2Mode() {
   const { toast } = useToast();
   const isConnected = useSliderStore((s) => s.isConnected);
   const sliderState = useSliderStore((s) => s.sliderState);
+  const tl2GimbalUi = useSliderStore((s) => s.tl2GimbalUi);
   const isCalibrated = sliderState.homed && sliderState.rightPoint > sliderState.leftPoint;
 
   const [startPercent, setStartPercent] = useState(0);
@@ -37,6 +40,8 @@ export function Timelapse2Mode() {
       endPercent,
       stepCount,
       delay,
+      gimbalA: tl2GimbalUi.a,
+      gimbalB: tl2GimbalUi.b,
     });
 
     toast({
@@ -119,6 +124,16 @@ export function Timelapse2Mode() {
           )}
         </CardContent>
       </Card>
+
+      {isConnected && <GimbalControls showLiveControlSections={false} />}
+      {isConnected && (
+        <TimelapseGimbalEditor
+          title="Step Gimbal Endpoints"
+          description="Set gimbal A/B poses, including focus, for interpolation across TL2 steps."
+          poses={tl2GimbalUi}
+          onChange={setTl2GimbalPose}
+        />
+      )}
     </div>
   );
 }

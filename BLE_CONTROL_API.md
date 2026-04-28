@@ -75,17 +75,34 @@ Request:
 #### `timelapse1`
 
 ```json
-{ "cmd": "mode", "mode": "timelapse1", "start": 0, "end": 50000, "totalTimeMs": 120000, "pingpong": true }
+{
+  "cmd": "mode",
+  "mode": "timelapse1",
+  "start": 0,
+  "end": 50000,
+  "totalTimeMs": 120000,
+  "pingpong": true,
+  "gimbalA": { "yaw": 0.0, "roll": 0.0, "pitch": 0.0, "focus": 0 },
+  "gimbalB": { "yaw": 45.0, "roll": 0.0, "pitch": -10.0, "focus": 500 }
+}
 ```
 
 - Required: `start`, `end`, `totalTimeMs`
 - Optional: `pingpong` (`true`/`false`, default `false`)
+- Optional: `gimbalA`, `gimbalB`
+- If one gimbal endpoint is provided, both are required.
+- Gimbal endpoint fields:
+  - `yaw`: `-180..180`
+  - `roll`: `-30..30`
+  - `pitch`: `-30..30`
+  - `focus`: `0..1000`
 - Behavior:
   1. Move to `start` (A) using max speed profile.
   2. Compute required A->B speed from distance and `totalTimeMs`.
      (`totalTimeMs` applies to A->B leg only, not move-to-A.)
   3. Run constant-speed A->B motion until endpoint B is reached.
   4. If `pingpong=true`, swap A/B and continue indefinitely until `stop`.
+  5. If `gimbalA/gimbalB` are provided, the firmware interpolates yaw/roll/pitch/focus across slider travel.
 
 #### `timelapse2`
 
@@ -103,6 +120,7 @@ Request:
 - Required: `start`, `end`, `stepCount`
 - Optional:
   - `delay` (ms): wait after trigger before moving one step (default 20)
+  - `gimbalA`, `gimbalB`: optional gimbal endpoints with the same shape as `timelapse1`
 
 TL2 constants are configured in firmware code:
 
@@ -116,6 +134,7 @@ Timelapse2 trigger behavior:
 3. Enforce min trigger spacing (firmware step interval + internal debounce).
 4. Wait `delay` ms.
 5. Move exactly one planned step (`(B-A)/stepCount`, with remainder distribution).
+6. If `gimbalA/gimbalB` are provided, the firmware interpolates yaw/roll/pitch/focus across step progress.
 
 #### `calibrating`
 
@@ -182,6 +201,62 @@ Note: legacy compatibility keys are removed. Use only the keys documented here.
 }
 ```
 
+### 8) Gimbal Bridge
+
+Use `cmd: "gimbal"` for BLE gimbal relay commands.
+
+#### Connect / Disconnect
+
+```json
+{ "cmd": "gimbal", "action": "connect", "requestId": "rr1" }
+{ "cmd": "gimbal", "action": "disconnect", "requestId": "rr2" }
+```
+
+#### Basic Actions
+
+```json
+{ "cmd": "gimbal", "action": "recenter", "requestId": "rr3" }
+{ "cmd": "gimbal", "action": "sleep", "requestId": "rr4" }
+{ "cmd": "gimbal", "action": "wake", "requestId": "rr5" }
+{ "cmd": "gimbal", "action": "shutter", "requestId": "rr6" }
+```
+
+#### Angle Control
+
+```json
+{
+  "cmd": "gimbal",
+  "action": "angle",
+  "yaw": 10.0,
+  "roll": 0.0,
+  "pitch": -5.0,
+  "requestId": "rr7"
+}
+```
+
+- Sends gimbal absolute-angle control.
+- Units are degrees.
+
+#### Focus Estimated Position
+
+```json
+{ "cmd": "gimbal", "action": "focus", "target": 650, "requestId": "rr8" }
+{ "cmd": "gimbal", "action": "focusZero", "requestId": "rr9" }
+```
+
+- `target` range: `0..1000`
+- This is estimated position only, maintained by the ESP32.
+- `focusZero` resets the estimate to `0` without reading real lens position.
+
+Gimbal action errors you should handle:
+
+- `missing_gimbal_action`
+- `invalid_gimbal_action`
+- `missing_gimbal_angle`
+- `missing_gimbal_focus_target`
+- `invalid_gimbal_focus_target`
+- `gimbal_busy`
+
 ## Valid Ranges / Values
 
 - `microsteps`: one of `1,2,4,8,16,32,64,128,256`
@@ -199,15 +274,7 @@ Note: legacy compatibility keys are removed. Use only the keys documented here.
 - `totalTimeMs` in `timelapse1` mode: `> 0`
 - `timelapse1PingPong`: `true|false`
 
-Runtime limits are exposed in status as:
-
-- `mxl`: max speed upper bound enforced by firmware
-- `al`: acceleration upper bound enforced by firmware
-
-Frontend percentage mapping:
-
-- `maxSpeed = round(mxl * speedPct / 100)`
-- `acceleration = round(al * accelPct / 100)`
+Current compact periodic status does not expose firmware limit fields like `mxl` or `al`.
 
 ## Response Characteristic (ACK/NAK)
 
@@ -260,39 +327,35 @@ Status is published periodically via notify.
 
 Short-key schema:
 
-- Runtime/control:
+- Periodic status keys:
   - `m` mode
-  - `e` error
+  - `h` homed flag
   - `p` current position
   - `t` target position
   - `v` commanded velocity
-  - `sid` session id
-  - `fw` firmware version
-- Position/calibration:
+  - `e` error
+  - `se` steps executed
   - `lp` left point
   - `rp` right point
-  - `h` homed flag
-- Driver/config:
-  - `de` driver enabled
-  - `ms` microsteps
-  - `cl` current limit
-  - `pv` PD voltage
-  - `sm` standstill mode
-  - `mx` max speed
-  - `mxl` max speed firmware limit
-  - `a` acceleration
-  - `al` acceleration firmware limit
-  - `hs` homing speed
-  - `gv` goto max velocity
-  - `t1v`, `t2v` mode velocities
-  - `t2i` timelapse2 step interval (ms)
-  - `t1tm` timelapse1 total time (ms)
-  - `t1pp` timelapse1 pingpong flag
-  - `sc` step count
-  - `se` steps executed
-  - `d2` timelapse2 trigger delay ms
-- IO:
-  - `x2` AUX2 input active
+  - `sid` session id
+  - `fw` firmware version
+- Periodic status is intentionally compact and does not include gimbal telemetry.
+- Current periodic status keys are:
+  - `m`, `h`, `p`, `t`, `v`, `e`, `se`, `lp`, `rp`, `sid`, `fw`
+- Gimbal telemetry is delivered on the response characteristic instead:
+  - command ACKs for `cmd:"gimbal"` include nested `gm`
+  - unsolicited bridge updates use `{"evt":"gimbal","sid":...,"gm":{...}}`
+  - `gm.c` connected
+  - `gm.g` connecting
+  - `gm.s` sleeping
+  - `gm.fk` focus initialized
+  - `gm.fp` focus estimated position `0..1000`
+  - `gm.b` battery percent when known
+  - `gm.y` yaw in degrees when known
+  - `gm.r` roll in degrees when known
+  - `gm.p2` pitch in degrees when known
+  - `gm.ek` error present
+  - `gm.e` error string
 
 Notes:
 
@@ -308,6 +371,9 @@ Notes:
 - `missing_target`
 - `missing_tl1_params`
 - `missing_tl2_params`
+- `incomplete_gimbal_endpoints`
+- `invalid_gimbal_mode`
+- `invalid_gimbal_pose`
 - `invalid_step_count`
 - `invalid_tl1_time`
 - `tl1_speed_too_high`
@@ -320,6 +386,12 @@ Notes:
 - `not_homed`
 - `step_timeout`
 - `invalid_endpoints`
+- `missing_gimbal_action`
+- `invalid_gimbal_action`
+- `missing_gimbal_angle`
+- `missing_gimbal_focus_target`
+- `invalid_gimbal_focus_target`
+- `gimbal_busy`
 
 ## Migration (v1 -> v2 Short Keys)
 
@@ -342,34 +414,22 @@ Timelapse2 update: `stepIntervalMs` and `vel` are no longer accepted in command 
 ### Status key mapping
 
 - `mode` -> `m`
-- `error` -> `e`
 - `position` -> `p`
 - `target` -> `t`
 - `velocityCmd` -> `v`
 - `leftPoint` -> `lp`
 - `rightPoint` -> `rp`
 - `homed` -> `h`
-- `driverEnabled` -> `de`
-- `microsteps` -> `ms`
-- `currentLimit` -> `cl`
-- `pdVoltage` -> `pv`
-- `standstillMode` -> `sm`
-- `maxSpeed` -> `mx`
-- `maxSpeedLimit` -> `mxl`
-- `acceleration` -> `a`
-- `accelerationLimit` -> `al`
-- `homingSpeed` -> `hs`
-- `gotoMaxVel` -> `gv`
-- `timelapse1Vel` -> `t1v`
-- `timelapse1TotalTimeMs` -> `t1tm`
-- `timelapse1PingPong` -> `t1pp`
-- `timelapse2Vel` -> `t2v`
-- `timelapse2StepIntervalMs` -> `t2i`
-- `stepCount` -> `sc`
+- `error` -> `e`
 - `stepsExecuted` -> `se`
-- `timelapse2DelayMs` -> `d2`
 - `sessionId` -> `sid`
-- `aux2` -> `x2`
+- `firmwareVersion` -> `fw`
+
+### Gimbal response/event mapping
+
+- `cmd: "ronin"` -> `cmd: "gimbal"`
+- `rn` -> `gm`
+- `evt: "ronin"` -> `evt: "gimbal"`
 
 ### Removed from periodic status
 
